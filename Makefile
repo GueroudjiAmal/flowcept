@@ -54,9 +54,11 @@ docs:
 # Run services using Docker
 services:
 	docker compose --file deployment/compose.yml up --detach
+	docker compose --file deployment/compose-mofka.yml up --detach
 
 # Stop the running Docker services and remove volumes attached to containers
 services-stop:
+	docker compose --file deployment/compose.yml down --volumes
 	docker compose --file deployment/compose.yml down --volumes
 
 # Run services using Docker

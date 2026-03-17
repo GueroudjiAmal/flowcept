@@ -40,6 +40,7 @@ class MQDaoDiaspora(MQDao):
         try:
             while True:
                 future = self.consumer.pull()
+                event = future.wait(timeout_ms=1)
                 while not future.completed:
                     event = future.wait(timeout_ms=1)
                 message = event.metadata

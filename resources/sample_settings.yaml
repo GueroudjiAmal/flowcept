@@ -39,29 +39,12 @@ instrumentation:
 experiment:
   user: root  # Optionally identify the user running the experiment. The logged username will be captured anyways.
 
-# mq:
-#   type: redis  # or kafka or mofka; Please adjust the port (kafka's default is 9092; redis is 6379). If mofka, adjust the group_file.
-#   host: localhost
-#   # uri: ?
-#   # instances: ["localhost:6379"] # We can have multiple MQ instances being accessed by the consumers but each interceptor will currently access one single MQ..
-#   port: 6379
-#   # group_file: mofka.json
-#   channel: interception
-#   buffer_size: 50
-#   insertion_buffer_time_secs: 5
-#   timing: false
-#   # uri: use Redis connection uri here
-#   chunk_size: -1  # use 0 or -1 to disable this. Or simply omit this from the config file.
-#   same_as_kvdb: false # Set this to true if you are using the same Redis instance both as an MQ and as the KV_DB. In that case, no need to repeat connection parameters in MQ. Use only what you define in KV_DB.
-# #  bin: /usr/local/bin/redis-server # Use this if you want to start redis using the flowcept-cli.
-# #  conf_file: /etc/redis/redis.conf
-
 mq:
   type: diaspora  # or kafka or mofka; Please adjust the port (kafka's default is 9092; redis is 6379). If mofka, adjust the group_file.
-  host: localhost
+  # host: localhost
   # uri: ?
   # instances: ["localhost:6379"] # We can have multiple MQ instances being accessed by the consumers but each interceptor will currently access one single MQ..
-  port: 6379
+  # port: 6379
   # group_file: mofka.json
   channel: interception
   buffer_size: 50

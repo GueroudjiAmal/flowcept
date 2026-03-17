@@ -19,6 +19,7 @@ from flowcept.configs import (
     MQ_TIMING,
     KVDB_ENABLED,
     MQ_ENABLED,
+    DB_FLUSH_MODE,
 )
 
 from flowcept.commons.utils import GenericJSONEncoder
@@ -48,6 +49,10 @@ class MQDao(object):
             from flowcept.commons.daos.mq_dao.mq_dao_mofka import MQDaoMofka
 
             return MQDaoMofka(*args, **kwargs)
+        elif MQ_TYPE == "diaspora":
+            from flowcept.commons.daos.mq_dao.mq_dao_diaspora import MQDaoDiaspora
+
+            return MQDaoDiaspora(*args, **kwargs)
         else:
             raise NotImplementedError
 

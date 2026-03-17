@@ -30,6 +30,35 @@ from typing import List
 
 from flowcept import configs
 
+FLOWCEPT_BANNER = r"""
+███████╗██╗      ██████╗ ██╗    ██╗ ██████╗███████╗██████╗ ████████╗
+██╔════╝██║     ██╔═══██╗██║    ██║██╔════╝██╔════╝██╔══██╗╚══██╔══╝
+█████╗  ██║     ██║   ██║██║ █╗ ██║██║     █████╗  ██████╔╝   ██║
+██╔══╝  ██║     ██║   ██║██║███╗██║██║     ██╔══╝  ██╔═══╝    ██║
+██║     ███████╗╚██████╔╝╚███╔███╔╝╚██████╗███████╗██║        ██║
+╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝  ╚═════╝╚══════╝╚═╝        ╚═╝
+           Lightweight Distributed Workflow Provenance
+                    https://flowcept.org/
+"""
+
+CONFIG_PROFILES = {
+    "full-online": {
+        "project.db_flush_mode": "online",
+        "mq.enabled": True,
+        "kv_db.enabled": True,
+        "databases.mongodb.enabled": True,
+        "databases.lmdb.enabled": False,
+    },
+    "full-offline": {
+        "project.db_flush_mode": "offline",
+        "project.dump_buffer.enabled": True,
+        "mq.enabled": False,
+        "kv_db.enabled": False,
+        "databases.mongodb.enabled": False,
+        "databases.lmdb.enabled": False,
+    },
+}
+
 
 def no_docstring(func):
     """Decorator to silence linter for missing docstrings."""
@@ -90,6 +119,88 @@ def init_settings(full: bool = False):
         cfg = OmegaConf.create(configs.DEFAULT_SETTINGS)
         OmegaConf.save(cfg, dest_path)
         print(f"Generated default settings under {dest_path}.")
+
+
+def _resolve_user_settings_path() -> Path:
+    """Resolve writable user settings path honoring FLOWCEPT_SETTINGS_PATH."""
+    settings_path_env = os.getenv("FLOWCEPT_SETTINGS_PATH", None)
+    if settings_path_env is not None:
+        return Path(settings_path_env)
+    return Path(os.path.join(configs._SETTINGS_DIR, "settings.yaml"))
+
+
+def _fmt_value(value) -> str:
+    """Format scalar/dict/list values for CLI output."""
+    if value == "<missing>":
+        return "<missing>"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _compute_profile_changes(cfg, profile_name: str):
+    """Compute old/new setting changes for a configuration profile."""
+    from omegaconf import OmegaConf
+
+    profile_map = CONFIG_PROFILES[profile_name]
+    changes = []
+    for key, new_value in profile_map.items():
+        old = OmegaConf.select(cfg, key, default="<missing>")
+        if old != new_value:
+            changes.append((key, old, new_value))
+    return changes
+
+
+def apply_config_profile(config_profile: str, yes: bool = False):
+    """
+    Apply a settings profile to the user settings file with confirmation.
+
+    Parameters
+    ----------
+    config_profile : str
+        Profile name. Supported values: full-online, full-offline.
+    yes : bool, optional
+        If true, skip confirmation prompt and apply changes immediately.
+    """
+    from omegaconf import OmegaConf
+
+    if config_profile not in CONFIG_PROFILES:
+        print(f"Unsupported profile '{config_profile}'. Supported: {sorted(CONFIG_PROFILES.keys())}")
+        return
+
+    settings_path = _resolve_user_settings_path()
+    if settings_path.exists():
+        cfg = OmegaConf.load(settings_path)
+    else:
+        cfg = OmegaConf.create(configs.DEFAULT_SETTINGS)
+
+    changes = _compute_profile_changes(cfg, config_profile)
+    print(f"Settings file: {settings_path}")
+    print(f"Requested profile: {config_profile}")
+
+    if not changes:
+        print("No changes needed. Settings already match this profile.")
+        return
+
+    print("Proposed changes:")
+    for key, old, new in changes:
+        print(f"- {key}: {_fmt_value(old)} -> {_fmt_value(new)}")
+
+    if not yes:
+        confirmation = input("Apply these changes? (y/N): ").strip().lower()
+        if confirmation != "y":
+            print("Operation aborted.")
+            return
+
+    for key, _, new in changes:
+        OmegaConf.update(cfg, key, new, merge=False)
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, settings_path)
+
+    print(f"Updated settings file: {settings_path}")
+    print(f"Applied profile: {config_profile}")
+    print("Changed keys:")
+    for key, old, new in changes:
+        print(f"- {key}: {_fmt_value(old)} -> {_fmt_value(new)}")
 
 
 def version():
@@ -610,12 +721,82 @@ def start_redis() -> None:
         print(f"Failed to start Redis: {e}")
 
 
+def start_webservice(webservice_host: str = "127.0.0.1", webservice_port: str = "8008"):
+    """
+    Start the Flowcept FastAPI webservice locally.
+
+    Parameters
+    ----------
+    webservice_host : str, optional
+        Host interface to bind (default: 127.0.0.1).
+    webservice_port : int, optional
+        Port to bind (default: 8008).
+    """
+    host = webservice_host
+    port = webservice_port
+    print(f"Starting Flowcept webservice on http://{host}:{port}")
+    print(f"Swagger UI:   http://{host}:{port}/docs")
+    print(f"ReDoc:        http://{host}:{port}/redoc")
+    print(f"OpenAPI JSON: http://{host}:{port}/openapi.json")
+    try:
+        import uvicorn
+    except Exception as e:
+        print("Could not import uvicorn. Install webservice dependencies: pip install -e '.[webservice]'")
+        print(e)
+        return
+
+    from flowcept.webservice.main import app
+
+    uvicorn.run(app, host=host, port=int(port))
+
+
+def generate_report(
+    input_path: str,
+    format: str = "markdown",
+    output_path: str = None,
+):
+    """
+    Generate a provenance report from a JSONL buffer file.
+
+    Parameters
+    ----------
+    input_path : str
+        Path to the Flowcept JSONL buffer file.
+    format : str, optional
+        Output format: markdown (default) or pdf.
+    output_path : str, optional
+        Output report path. If omitted, defaults to PROVENANCE_CARD.md for markdown
+        and PROVENANCE_REPORT.pdf for pdf.
+    """
+    from flowcept import Flowcept
+
+    report_format = (format or "markdown").strip().lower()
+    if report_format not in {"markdown", "pdf"}:
+        print("Unsupported format. Use 'markdown' or 'pdf'.")
+        return
+
+    report_type = "provenance_card" if report_format == "markdown" else "provenance_report"
+    resolved_output_path = output_path
+    if not resolved_output_path:
+        resolved_output_path = "PROVENANCE_CARD.md" if report_format == "markdown" else "PROVENANCE_REPORT.pdf"
+
+    stats = Flowcept.generate_report(
+        report_type=report_type,
+        input_jsonl_path=input_path,
+        format=report_format,
+        output_path=resolved_output_path,
+    )
+    print(json.dumps(stats, indent=2, default=str))
+    print(f"Report generated at: {Path(resolved_output_path).resolve()}")
+
+
 COMMAND_GROUPS = [
     ("Basic Commands", [version, check_services, show_settings, init_settings, start_services, stop_services]),
     ("Consumption Commands", [start_consumption_services, stop_consumption_services, stream_messages]),
     ("Database Commands", [workflow_count, query, get_task]),
+    ("Report Commands", [generate_report]),
     ("Agent Commands", [start_agent, agent_client, start_agent_gui]),
-    ("External Services", [start_mongo, start_redis]),
+    ("External Services", [start_mongo, start_redis, start_webservice]),
 ]
 
 COMMANDS = set(f for _, fs in COMMAND_GROUPS for f in fs)
@@ -683,6 +864,18 @@ def main():  # noqa: D103
     parser = argparse.ArgumentParser(
         description="Flowcept CLI", formatter_class=argparse.RawTextHelpFormatter, add_help=False
     )
+    parser.add_argument(
+        "--config-profile",
+        type=str,
+        choices=sorted(CONFIG_PROFILES.keys()),
+        help="Apply a predefined settings profile: full-online or full-offline.",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Auto-confirm profile application (used with --config-profile).",
+    )
 
     for func in COMMANDS:
         doc = func.__doc__ or ""
@@ -727,7 +920,14 @@ def main():  # noqa: D103
         sys.exit(0)
 
     if len(sys.argv) == 1 or help_flag:
+        print(FLOWCEPT_BANNER)
         print("\nFlowcept CLI\n")
+        print("Profile Commands:\n")
+        print("  flowcept --config-profile full-online [-y]")
+        print("      Configure settings for fully online mode (MQ + KV + Mongo enabled).")
+        print("  flowcept --config-profile full-offline [-y]")
+        print("      Configure settings for fully offline mode (MQ + KV + Mongo disabled).")
+        print("")
         for group, funcs in COMMAND_GROUPS:
             print(f"{group}:\n")
             for func in funcs:
@@ -756,6 +956,10 @@ def main():  # noqa: D103
         sys.exit(0)
 
     args = vars(parser.parse_args())
+
+    if args.get("config_profile") is not None:
+        apply_config_profile(config_profile=args["config_profile"], yes=bool(args.get("yes")))
+        return
 
     for func in COMMANDS:
         flag = f"--{func.__name__.replace('_', '-')}"

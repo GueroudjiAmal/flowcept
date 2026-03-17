@@ -1,5 +1,5 @@
 from time import time
-from typing import Dict, Any
+from typing import Dict, Any, List
 import os
 import threading
 import random
@@ -8,9 +8,10 @@ from flowcept.commons.flowcept_dataclasses.task_object import (
     TaskObject,
 )
 from flowcept.commons.vocabulary import Status
-from flowcept.configs import INSTRUMENTATION_ENABLED, TELEMETRY_ENABLED
+from flowcept.configs import INSTRUMENTATION_ENABLED, REPLACE_NON_JSON_SERIALIZABLE, TELEMETRY_ENABLED
 from flowcept.flowcept_api.flowcept_controller import Flowcept
 from flowcept.flowceptor.adapters.instrumentation_interceptor import InstrumentationInterceptor
+from flowcept.commons.utils import replace_non_serializable
 
 
 class FlowceptTask(object):
@@ -44,10 +45,13 @@ class FlowceptTask(object):
         campaign_id: str = None,
         activity_id: str = None,
         agent_id: str = None,
+        source_agent_id: str = None,
         parent_task_id: str = None,
         used: Dict = None,
         data: Any = None,
         subtype: str = None,
+        tags: List[str] = None,
+        adapter_id: str = None,
         custom_metadata: Dict = None,
         generated: Dict = None,
         started_at: float = None,
@@ -112,11 +116,22 @@ class FlowceptTask(object):
         self._task.workflow_id = workflow_id or Flowcept.current_workflow_id
         self._task.campaign_id = campaign_id or Flowcept.campaign_id
         self._task.parent_task_id = parent_task_id
+
+        if REPLACE_NON_JSON_SERIALIZABLE:
+            used = replace_non_serializable(used)
+
         self._task.used = used
         self._task.data = data
+        self._task.tags = tags
         self._task.subtype = subtype
+        self._task.adapter_id = adapter_id
         self._task.agent_id = agent_id
-        self._task.custom_metadata = custom_metadata
+        self._task.source_agent_id = source_agent_id
+        self._task.custom_metadata = (
+            replace_non_serializable(custom_metadata)
+            if (REPLACE_NON_JSON_SERIALIZABLE and custom_metadata is not None)
+            else custom_metadata
+        )
 
         self._ended = False
 
@@ -189,12 +204,23 @@ class FlowceptTask(object):
             self._task.telemetry_at_end = tel
         if data:
             self._task.data = data
-        if custom_metadata:
-            self._task.custom_metadata = custom_metadata
+
+        if custom_metadata is not None:
+            sanitized_custom_metadata = (
+                replace_non_serializable(custom_metadata) if REPLACE_NON_JSON_SERIALIZABLE else custom_metadata
+            )
+
+            if self._task.custom_metadata:
+                self._task.custom_metadata.update(sanitized_custom_metadata)
+            else:
+                self._task.custom_metadata = sanitized_custom_metadata
+
         self._task.ended_at = ended_at or time()
         self._task.status = status
         self._task.stderr = stderr
         self._task.stdout = stdout
+        if REPLACE_NON_JSON_SERIALIZABLE:
+            generated = replace_non_serializable(generated)
         self._task.generated = generated
         if self._interceptor._mq_dao.buffer is None:
             raise Exception("Did you start Flowcept?")
@@ -215,3 +241,6 @@ class FlowceptTask(object):
             self._task.ended_at = self._task.started_at  # message sents are not going to be analyzed for task duration
             self._interceptor.intercept(self._task.to_dict())
             self._ended = True
+
+    def __str__(self):
+        return str(self._task)

@@ -8,6 +8,7 @@ from flowcept.commons.flowcept_dataclasses.workflow_object import (
     WorkflowObject,
 )
 from flowcept.commons.flowcept_dataclasses.task_object import TaskObject
+from flowcept.commons.flowcept_dataclasses.blob_object import BlobObject
 from flowcept.commons.flowcept_logger import FlowceptLogger
 
 
@@ -23,18 +24,41 @@ class DBAPI(object):
 
     @classmethod
     def _dao(cls) -> DocumentDBDAO:
+        """Return the configured document DAO singleton."""
         return DocumentDBDAO.get_instance(create_indices=False)
 
     def close(self):
-        """Close DB resources."""
+        """Close DB resources for the active DAO instance."""
         DBAPI._dao().close()
 
     def insert_or_update_task(self, task: TaskObject):
-        """Insert or update task."""
+        """Insert or update a task document.
+
+        Parameters
+        ----------
+        task : TaskObject
+            Task object to persist.
+
+        Returns
+        -------
+        Any
+            DAO-specific insertion/update return value.
+        """
         return DBAPI._dao().insert_one_task(task.to_dict())
 
     def insert_or_update_workflow(self, workflow_obj: WorkflowObject) -> WorkflowObject:
-        """Insert or update workflow."""
+        """Insert or update a workflow document.
+
+        Parameters
+        ----------
+        workflow_obj : WorkflowObject
+            Workflow object to persist.
+
+        Returns
+        -------
+        WorkflowObject or None
+            The persisted workflow object, or ``None`` on failure.
+        """
         if workflow_obj.workflow_id is None:
             workflow_obj.workflow_id = str(uuid.uuid4())
         self.logger.debug(f"DB API going to save workflow {workflow_obj}")
@@ -46,7 +70,18 @@ class DBAPI(object):
             return workflow_obj
 
     def get_workflow_object(self, workflow_id) -> WorkflowObject:
-        """Get the workflow from its id."""
+        """Get a workflow object by workflow identifier.
+
+        Parameters
+        ----------
+        workflow_id : str
+            Workflow identifier.
+
+        Returns
+        -------
+        WorkflowObject or None
+            Matching workflow object, or ``None`` when not found.
+        """
         wfobs = self.workflow_query(filter={WorkflowObject.workflow_id_field(): workflow_id})
         if wfobs is None or len(wfobs) == 0:
             self.logger.error("Could not retrieve workflow with that filter.")
@@ -55,7 +90,18 @@ class DBAPI(object):
             return WorkflowObject.from_dict(wfobs[0])
 
     def workflow_query(self, filter) -> List[Dict]:
-        """Query the workflows collection."""
+        """Query the ``workflows`` collection.
+
+        Parameters
+        ----------
+        filter : dict
+            Mongo/DAO filter expression.
+
+        Returns
+        -------
+        list of dict or None
+            Matching workflow records, or ``None`` on error.
+        """
         results = self.query(collection="workflows", filter=filter)
         if results is None:
             self.logger.error("Could not retrieve workflows with that filter.")
@@ -63,8 +109,12 @@ class DBAPI(object):
         return results
 
     def get_tasks_from_current_workflow(self):
-        """
-        Get the tasks of the current workflow in the Flowcept instance.
+        """Get tasks belonging to ``Flowcept.current_workflow_id``.
+
+        Returns
+        -------
+        list of dict or None
+            Matching task records for the active workflow.
         """
         from flowcept.flowcept_api.flowcept_controller import Flowcept
 
@@ -79,7 +129,28 @@ class DBAPI(object):
         aggregation=None,
         remove_json_unserializables=True,
     ) -> List[Dict]:
-        """Query the tasks collection."""
+        """Query the ``tasks`` collection.
+
+        Parameters
+        ----------
+        filter : dict
+            Filter expression used by the backend DAO.
+        projection : list or dict, optional
+            Fields to include in returned task records.
+        limit : int, optional
+            Maximum number of records to return.
+        sort : list, optional
+            Sort expression (field/order pairs).
+        aggregation : list, optional
+            Aggregation directives supported by the DAO.
+        remove_json_unserializables : bool, optional
+            Whether to drop known non-JSON-serializable fields.
+
+        Returns
+        -------
+        list of dict or None
+            Matching task records, or ``None`` on error.
+        """
         results = self.query(
             collection="tasks",
             filter=filter,
@@ -93,6 +164,236 @@ class DBAPI(object):
             self.logger.error("Could not retrieve tasks with that filter.")
             return None
         return results
+
+    def blob_object_query(self, filter) -> List[Dict]:
+        """Query the ``objects`` collection.
+
+        Parameters
+        ----------
+        filter : dict
+            Filter expression for object records.
+
+        Returns
+        -------
+        list of dict or None
+            Matching object documents, or ``None`` on error.
+        """
+        results = self.query(collection="objects", filter=filter)
+        if results is None:
+            self.logger.error("Could not retrieve blob objects with that filter.")
+            return None
+        return results
+
+    def get_blob_object(self, object_id, version=None) -> BlobObject:
+        """Get a blob object by ``object_id``.
+
+        Parameters
+        ----------
+        object_id : str
+            Object identifier.
+        version : int or None, optional
+            ``None`` returns latest from ``objects``.
+            Integer version returns the exact version from latest/history.
+
+        Returns
+        -------
+        BlobObject or None
+            The requested blob metadata/object wrapper, or ``None`` if not found.
+
+        Raises
+        ------
+        ValueError
+            If a versioned request is made on a backend without version support.
+        """
+        dao = DBAPI._dao()
+        if hasattr(dao, "get_blob_object_doc"):
+            obj_doc = dao.get_blob_object_doc(object_id=object_id, version=version)
+        else:
+            if version is not None:
+                raise ValueError("Versioned blob retrieval is not supported by the configured DB backend.")
+            objs = self.blob_object_query(filter={BlobObject.object_id_field(): object_id})
+            obj_doc = None if objs is None or len(objs) == 0 else objs[0]
+
+        if obj_doc is None:
+            self.logger.error("Could not retrieve blob object with that filter.")
+            return None
+        return BlobObject.from_dict(obj_doc)
+
+    def get_ml_model(self, object_id, version=None) -> BlobObject:
+        """Alias to get an ML model blob object.
+
+        Parameters
+        ----------
+        object_id : str
+            Object identifier.
+        version : int or None, optional
+            ``None`` for latest, integer for exact version.
+
+        Returns
+        -------
+        BlobObject or None
+            Requested ML model blob object.
+        """
+        return self.get_blob_object(object_id, version=version)
+
+    def ml_model_query(self, filter) -> List[Dict]:
+        """Alias to query ML model blob objects.
+
+        Parameters
+        ----------
+        filter : dict
+            Filter expression for object records.
+
+        Returns
+        -------
+        list of dict or None
+            Matching object documents.
+        """
+        return self.blob_object_query(filter)
+
+    def get_dataset(self, object_id, version=None) -> BlobObject:
+        """Alias to get a dataset blob object.
+
+        Parameters
+        ----------
+        object_id : str
+            Object identifier.
+        version : int or None, optional
+            ``None`` for latest, integer for exact version.
+
+        Returns
+        -------
+        BlobObject or None
+            Requested dataset blob object.
+        """
+        return self.get_blob_object(object_id, version=version)
+
+    def dataset_query(self, filter) -> List[Dict]:
+        """Alias to query dataset blob objects.
+
+        Parameters
+        ----------
+        filter : dict
+            Filter expression for object records.
+
+        Returns
+        -------
+        list of dict or None
+            Matching object documents.
+        """
+        return self.blob_object_query(filter)
+
+    def get_object_history(self, object_id) -> List[Dict]:
+        """Get object version metadata history (latest first, no blob payload).
+
+        Parameters
+        ----------
+        object_id : str
+            Object identifier.
+
+        Returns
+        -------
+        list of dict
+            Version metadata records sorted by descending version.
+
+        Raises
+        ------
+        ValueError
+            If version listing is unavailable for the active backend.
+        """
+        dao = DBAPI._dao()
+        if hasattr(dao, "get_object_history"):
+            return dao.get_object_history(object_id)
+        if not hasattr(dao, "list_object_versions"):
+            raise ValueError("Version listing is not supported by the configured DB backend.")
+        return dao.list_object_versions(object_id)
+
+    def list_object_versions(self, object_id) -> List[Dict]:
+        """Backward-compatible alias to ``get_object_history``."""
+        return self.get_object_history(object_id)
+
+    def get_blob_fingerprint(self, object_id, version=None) -> Dict:
+        """Get a lightweight blob fingerprint for equality checks.
+
+        Parameters
+        ----------
+        object_id : str
+            Object identifier.
+        version : int or None, optional
+            ``None`` for latest version, integer for an exact version.
+
+        Returns
+        -------
+        dict
+            Metadata-only fingerprint with hash and size fields.
+        """
+        dao = DBAPI._dao()
+        if hasattr(dao, "get_blob_object_metadata_doc"):
+            doc = dao.get_blob_object_metadata_doc(object_id=object_id, version=version)
+        else:
+            # Fallback for backends without dedicated metadata retrieval.
+            doc = self.get_blob_object(object_id=object_id, version=version).to_dict()
+            doc.pop("data", None)
+
+        return {
+            "object_id": doc.get("object_id"),
+            "version": int(doc.get("version", 0)),
+            "object_size_bytes": doc.get("object_size_bytes"),
+            "data_sha256": doc.get("data_sha256"),
+            "data_hash_algo": doc.get("data_hash_algo"),
+            "storage_type": "in_object" if "grid_fs_file_id" not in doc else "gridfs",
+        }
+
+    def blob_objects_equal(
+        self,
+        object_id_a,
+        object_id_b,
+        version_a=None,
+        version_b=None,
+        fallback_to_payload=False,
+    ) -> bool:
+        """Compare two blob objects by persisted payload identity metadata.
+
+        Parameters
+        ----------
+        object_id_a : str
+            First object identifier.
+        object_id_b : str
+            Second object identifier.
+        version_a : int or None, optional
+            Version of the first object. ``None`` means latest.
+        version_b : int or None, optional
+            Version of the second object. ``None`` means latest.
+        fallback_to_payload : bool, optional
+            If ``True`` and hash metadata is unavailable, compare loaded payload bytes.
+
+        Returns
+        -------
+        bool
+            ``True`` when objects are equivalent under the selected strategy, else ``False``.
+        """
+        fp_a = self.get_blob_fingerprint(object_id=object_id_a, version=version_a)
+        fp_b = self.get_blob_fingerprint(object_id=object_id_b, version=version_b)
+
+        hash_a = fp_a.get("data_sha256")
+        hash_b = fp_b.get("data_sha256")
+        algo_a = fp_a.get("data_hash_algo")
+        algo_b = fp_b.get("data_hash_algo")
+
+        if hash_a and hash_b and algo_a == algo_b:
+            return hash_a == hash_b
+
+        size_a = fp_a.get("object_size_bytes")
+        size_b = fp_b.get("object_size_bytes")
+        if size_a is not None and size_b is not None and size_a != size_b:
+            return False
+
+        if not fallback_to_payload:
+            return False
+
+        data_a = getattr(self.get_blob_object(object_id_a, version=version_a), "data", None)
+        data_b = getattr(self.get_blob_object(object_id_b, version=version_b), "data", None)
+        return data_a == data_b
 
     def get_tasks_recursive(self, workflow_id, max_depth=999, mapping=None):
         """
@@ -175,7 +476,26 @@ class DBAPI(object):
         export_format="json",
         should_zip=False,
     ):
-        """Dump to the file."""
+        """Export data from a collection to a file.
+
+        Parameters
+        ----------
+        collection : str, optional
+            Collection name to dump.
+        filter : dict, optional
+            Filter expression for selecting records.
+        output_file : str, optional
+            Output file path.
+        export_format : str, optional
+            Export format supported by backend DAO.
+        should_zip : bool, optional
+            Whether output should be compressed.
+
+        Returns
+        -------
+        bool
+            ``True`` on success, ``False`` on validation or DAO errors.
+        """
         if filter is None and not should_zip:
             self.logger.error("Not allowed to dump entire database without filter and without zipping it.")
             return False
@@ -202,8 +522,47 @@ class DBAPI(object):
         custom_metadata=None,
         save_data_in_collection=False,
         pickle=False,
+        control_version=False,
+        tags=None,
     ):
-        """Save the object."""
+        """Save or update a blob object.
+
+        Parameters
+        ----------
+        object : Any
+            Blob payload bytes or serializable object.
+        object_id : str, optional
+            Logical object identifier. Generated when omitted.
+        task_id : str, optional
+            Associated task identifier.
+        workflow_id : str, optional
+            Associated workflow identifier. Defaults to current workflow when available.
+        type : str, optional
+            User-defined object category.
+        custom_metadata : dict, optional
+            Arbitrary metadata attached to the object.
+        save_data_in_collection : bool, optional
+            ``True`` stores bytes in-object (``data`` field in ``objects``).
+            ``False`` stores payload in GridFS and keeps pointer in metadata.
+        pickle : bool, optional
+            If ``True``, pickle ``object`` before persistence.
+        control_version : bool, optional
+            If ``True``, enable append-only history semantics via ``object_history``.
+        tags : list of str, optional
+            Labels to associate with the object.
+
+        Returns
+        -------
+        str
+            Persisted object identifier.
+        """
+        if workflow_id is None:
+            try:
+                from flowcept.flowcept_api.flowcept_controller import Flowcept
+
+                workflow_id = Flowcept.current_workflow_id
+            except Exception:
+                workflow_id = None
         return DBAPI._dao().save_or_update_object(
             object,
             object_id,
@@ -213,10 +572,69 @@ class DBAPI(object):
             custom_metadata,
             save_data_in_collection=save_data_in_collection,
             pickle_=pickle,
+            control_version=control_version,
+            tags=tags,
+        )
+
+    def update_object_metadata(
+        self,
+        object_id,
+        custom_metadata=None,
+        tags=None,
+        type=None,
+        task_id=None,
+        workflow_id=None,
+        control_version=True,
+    ):
+        """Update object metadata without rewriting object payload bytes.
+
+        Parameters
+        ----------
+        object_id : str
+            Logical object identifier to update.
+        custom_metadata : dict, optional
+            Metadata dictionary to set.
+        tags : list of str, optional
+            Tags to set.
+        type : str, optional
+            Object type/category to set.
+        task_id : str, optional
+            Task identifier to set.
+        workflow_id : str, optional
+            Workflow identifier to set.
+        control_version : bool, optional
+            If ``True`` (default), append history and increment version.
+
+        Returns
+        -------
+        str
+            Updated object identifier.
+        """
+        return DBAPI._dao().update_object_metadata(
+            object_id=object_id,
+            custom_metadata=custom_metadata,
+            tags=tags,
+            type=type,
+            task_id=task_id,
+            workflow_id=workflow_id,
+            control_version=control_version,
         )
 
     def to_df(self, collection="tasks", filter=None):
-        """Return a dataframe given the filter."""
+        """Query a collection and return a pandas DataFrame.
+
+        Parameters
+        ----------
+        collection : str, optional
+            Collection name to convert.
+        filter : dict, optional
+            Filter expression.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame generated by DAO backend.
+        """
         return DBAPI._dao().to_df(collection, filter)
 
     def query(
@@ -229,8 +647,143 @@ class DBAPI(object):
         remove_json_unserializables=True,
         collection="tasks",
     ):
-        """Query it."""
+        """Run a generic query against a collection.
+
+        Parameters
+        ----------
+        filter : dict, optional
+            Filter expression.
+        projection : list or dict, optional
+            Projected fields to include.
+        limit : int, optional
+            Maximum number of records.
+        sort : list, optional
+            Sort expression.
+        aggregation : list, optional
+            Aggregation directives.
+        remove_json_unserializables : bool, optional
+            Drop known non-JSON-serializable fields where supported.
+        collection : str, optional
+            Target collection name.
+
+        Returns
+        -------
+        list of dict or None
+            Query results from the backend DAO.
+        """
         return DBAPI._dao().query(filter, projection, limit, sort, aggregation, remove_json_unserializables, collection)
+
+    def save_or_update_ml_model(
+        self,
+        object,
+        object_id=None,
+        task_id=None,
+        workflow_id=None,
+        type="ml_model",
+        custom_metadata=None,
+        save_data_in_collection=False,
+        pickle=False,
+        control_version=False,
+        tags=None,
+    ):
+        """Alias to save or update ML model blobs.
+
+        Parameters
+        ----------
+        object : Any
+            Model payload bytes/object.
+        object_id : str, optional
+            Logical object identifier.
+        task_id : str, optional
+            Associated task identifier.
+        workflow_id : str, optional
+            Associated workflow identifier.
+        type : str, optional
+            Category label. Defaults to ``"ml_model"``.
+        custom_metadata : dict, optional
+            Custom metadata.
+        save_data_in_collection : bool, optional
+            In-object data storage toggle (``data`` field in ``objects``).
+        pickle : bool, optional
+            Pickle before storage.
+        control_version : bool, optional
+            Enable append-only history semantics.
+        tags : list of str, optional
+            Labels to associate with the object.
+
+        Returns
+        -------
+        str
+            Persisted object identifier.
+        """
+        return self.save_or_update_object(
+            object=object,
+            object_id=object_id,
+            task_id=task_id,
+            workflow_id=workflow_id,
+            type=type,
+            custom_metadata=custom_metadata,
+            save_data_in_collection=save_data_in_collection,
+            pickle=pickle,
+            control_version=control_version,
+            tags=tags,
+        )
+
+    def save_or_update_dataset(
+        self,
+        object,
+        object_id=None,
+        task_id=None,
+        workflow_id=None,
+        type="dataset",
+        custom_metadata=None,
+        save_data_in_collection=False,
+        pickle=False,
+        control_version=False,
+        tags=None,
+    ) -> str:
+        """Alias to save or update dataset blobs.
+
+        Parameters
+        ----------
+        object : Any
+            Dataset payload bytes/object.
+        object_id : str, optional
+            Logical object identifier.
+        task_id : str, optional
+            Associated task identifier.
+        workflow_id : str, optional
+            Associated workflow identifier.
+        type : str, optional
+            Category label. Defaults to ``"dataset"``.
+        custom_metadata : dict, optional
+            Custom metadata.
+        save_data_in_collection : bool, optional
+            In-object data storage toggle (``data`` field in ``objects``).
+        pickle : bool, optional
+            Pickle before storage.
+        control_version : bool, optional
+            Enable append-only history semantics.
+        tags : list of str, optional
+            Labels to associate with the object.
+
+        Returns
+        -------
+        str
+            Persisted object identifier.
+        """
+        return self.save_or_update_object(
+            object=object,
+            object_id=object_id,
+            task_id=task_id,
+            workflow_id=workflow_id,
+            type=type,
+            custom_metadata=custom_metadata,
+            save_data_in_collection=save_data_in_collection,
+            pickle=pickle,
+            control_version=control_version,
+            tags=tags,
+        )
 
     def save_or_update_torch_model(
         self,
@@ -238,19 +791,38 @@ class DBAPI(object):
         object_id=None,
         task_id=None,
         workflow_id=None,
-        custom_metadata: dict = {},
+        custom_metadata=None,
+        control_version=False,
+        save_profile=True,
+        tags=None,
     ) -> str:
-        """Save model.
+        """Save a PyTorch model state dictionary as an object blob.
 
-        Save the PyTorch model state_dict to a MongoDB collection as binary data.
-
-        Args:
-            model (torch.nn.Module): The PyTorch model to be saved.
-            custom_metadata (Dict[str, str]): Custom metadata to be stored with the model.
+        Parameters
+        ----------
+        model : torch.nn.Module
+            PyTorch model whose ``state_dict`` will be persisted.
+        object_id : str, optional
+            Existing object identifier to update.
+        task_id : str, optional
+            Associated task identifier.
+        workflow_id : str, optional
+            Associated workflow identifier.
+        custom_metadata : dict, optional
+            Extra metadata. The model class name is added automatically.
+        control_version : bool, optional
+            Enable append-only history semantics when updating an existing
+            logical object id.
+        save_profile : bool, optional
+            If ``True`` (default), adds ``model_profile`` to
+            ``custom_metadata`` using Flowcept PyTorch profiling.
+        tags : list of str, optional
+            Labels to associate with the object.
 
         Returns
         -------
-            str: The object ID of the saved model in the database.
+        str
+            Persisted object identifier.
         """
         import torch
         import io
@@ -260,8 +832,16 @@ class DBAPI(object):
         torch.save(state_dict, buffer)
         buffer.seek(0)
         binary_data = buffer.read()
+        if custom_metadata is None:
+            custom_metadata = {}
+        model_profile = {}
+        if save_profile:
+            from flowcept.instrumentation.flowcept_torch import get_torch_model_profile
+
+            model_profile = {"model_profile": get_torch_model_profile(model)}
         cm = {
             **custom_metadata,
+            **model_profile,
             "class": model.__class__.__name__,
         }
         obj_id = self.save_or_update_object(
@@ -271,17 +851,31 @@ class DBAPI(object):
             task_id=task_id,
             workflow_id=workflow_id,
             custom_metadata=cm,
+            control_version=control_version,
+            tags=tags,
         )
 
         return obj_id
 
     def load_torch_model(self, model, object_id: str):
-        """Load a torch model stored in the database.
+        """Load a stored PyTorch model state dict into a model instance.
 
-        Args:
-            model (torch.nn.Module): An empty PyTorch model to be loaded. The class of this model
-            in argument should be the same of the model that was saved.
-            object_id (str): Id of the object stored in the objects collection.
+        Parameters
+        ----------
+        model : torch.nn.Module
+            Target model instance to receive the persisted state dict.
+        object_id : str
+            Object identifier in ``objects``.
+
+        Returns
+        -------
+        dict
+            Object document used to load the model.
+
+        Notes
+        -----
+        This method also attaches ``model._flowcept_model_object`` with object
+        metadata only (all available fields except blob bytes in ``data``).
         """
         import torch
         import io
@@ -297,5 +891,6 @@ class DBAPI(object):
         buffer = io.BytesIO(binary_data)
         state_dict = torch.load(buffer, weights_only=True)
         model.load_state_dict(state_dict)
+        model._flowcept_model_object = {k: v for k, v in doc.items() if k != "data"}
 
         return doc

@@ -1,0 +1,1252 @@
+openapi: 3.1.0
+info:
+  title: Flowcept Webservice API
+  description: Read-only REST API for Flowcept provenance data. Provides workflows,
+    tasks, and objects endpoints with query support.
+  version: 1.0.0
+paths:
+  /:
+    get:
+      tags:
+      - health
+      summary: Root
+      operationId: root__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Root  Get
+  /api/v1/health/live:
+    get:
+      tags:
+      - health
+      summary: Live
+      description: Liveness check.
+      operationId: live_api_v1_health_live_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Live Api V1 Health Live Get
+  /api/v1/health/ready:
+    get:
+      tags:
+      - health
+      summary: Ready
+      description: Readiness check.
+      operationId: ready_api_v1_health_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Ready Api V1 Health Ready Get
+  /api/v1/workflows:
+    get:
+      tags:
+      - workflows
+      summary: List Workflows
+      description: List workflows with optional basic filters.
+      operationId: list_workflows_api_v1_workflows_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: user
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User
+      - name: campaign_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Campaign Id
+      - name: parent_workflow_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parent Workflow Id
+      - name: name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+      - name: filter_json
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filter Json
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workflows/{workflow_id}:
+    get:
+      tags:
+      - workflows
+      summary: Get Workflow
+      description: Get a workflow by id.
+      operationId: get_workflow_api_v1_workflows__workflow_id__get
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Workflow Api V1 Workflows  Workflow Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workflows/query:
+    post:
+      tags:
+      - workflows
+      summary: Query Workflows
+      description: Run an advanced read-only workflows query.
+      operationId: query_workflows_api_v1_workflows_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workflows/{workflow_id}/reports/provenance-card/download:
+    post:
+      tags:
+      - workflows
+      summary: Download Workflow Provenance Card
+      description: Generate and download a workflow provenance card markdown file.
+      operationId: download_workflow_provenance_card_api_v1_workflows__workflow_id__reports_provenance_card_download_post
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/tasks:
+    get:
+      tags:
+      - tasks
+      summary: List Tasks
+      description: List tasks with optional basic filters.
+      operationId: list_tasks_api_v1_tasks_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: workflow_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Id
+      - name: parent_task_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Parent Task Id
+      - name: campaign_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Campaign Id
+      - name: task_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: filter_json
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filter Json
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/tasks/{task_id}:
+    get:
+      tags:
+      - tasks
+      summary: Get Task
+      description: Get a task by id.
+      operationId: get_task_api_v1_tasks__task_id__get
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Task Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Task Api V1 Tasks  Task Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/tasks/by_workflow/{workflow_id}:
+    get:
+      tags:
+      - tasks
+      summary: List Tasks By Workflow
+      description: List tasks for a workflow.
+      operationId: list_tasks_by_workflow_api_v1_tasks_by_workflow__workflow_id__get
+      parameters:
+      - name: workflow_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workflow Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/tasks/query:
+    post:
+      tags:
+      - tasks
+      summary: Query Tasks
+      description: Run an advanced read-only task query.
+      operationId: query_tasks_api_v1_tasks_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects:
+    get:
+      tags:
+      - objects
+      summary: List Objects
+      description: List objects with optional basic filters.
+      operationId: list_objects_api_v1_objects_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: object_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Id
+      - name: workflow_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Id
+      - name: task_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+      - name: type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Type
+      - name: filter_json
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filter Json
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/{object_id}:
+    get:
+      tags:
+      - objects
+      summary: Get Object
+      description: Get latest version of an object by id.
+      operationId: get_object_api_v1_objects__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Object Api V1 Objects  Object Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/{object_id}/versions/{version}:
+    get:
+      tags:
+      - objects
+      summary: Get Object Version
+      description: Get a specific object version by id and version number.
+      operationId: get_object_version_api_v1_objects__object_id__versions__version__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Object Version Api V1 Objects  Object Id  Versions  Version  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/{object_id}/download:
+    get:
+      tags:
+      - objects
+      summary: Download Object
+      description: Download object payload as binary.
+      operationId: download_object_api_v1_objects__object_id__download_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/{object_id}/versions/{version}/download:
+    get:
+      tags:
+      - objects
+      summary: Download Object Version
+      description: Download a specific object payload version as binary.
+      operationId: download_object_version_api_v1_objects__object_id__versions__version__download_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/{object_id}/history:
+    get:
+      tags:
+      - objects
+      summary: Get Object History
+      description: Get object metadata history (latest-first).
+      operationId: get_object_history_api_v1_objects__object_id__history_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/objects/query:
+    post:
+      tags:
+      - objects
+      summary: Query Objects
+      description: Run an advanced read-only object query.
+      operationId: query_objects_api_v1_objects_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObjectQueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/datasets:
+    get:
+      tags:
+      - datasets
+      summary: List Datasets
+      operationId: list_datasets_api_v1_datasets_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: workflow_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Id
+      - name: task_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+      - name: object_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Id
+      - name: filter_json
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filter Json
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/datasets/{object_id}:
+    get:
+      tags:
+      - datasets
+      summary: Get Dataset
+      operationId: get_dataset_api_v1_datasets__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Dataset Api V1 Datasets  Object Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/datasets/{object_id}/versions/{version}:
+    get:
+      tags:
+      - datasets
+      summary: Get Dataset Version
+      operationId: get_dataset_version_api_v1_datasets__object_id__versions__version__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Dataset Version Api V1 Datasets  Object Id  Versions  Version  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/datasets/{object_id}/download:
+    get:
+      tags:
+      - datasets
+      summary: Download Dataset
+      operationId: download_dataset_api_v1_datasets__object_id__download_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/datasets/query:
+    post:
+      tags:
+      - datasets
+      summary: Query Datasets
+      operationId: query_datasets_api_v1_datasets_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObjectQueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/models:
+    get:
+      tags:
+      - models
+      summary: List Models
+      operationId: list_models_api_v1_models_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: workflow_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Workflow Id
+      - name: task_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+      - name: object_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Id
+      - name: filter_json
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filter Json
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/models/{object_id}:
+    get:
+      tags:
+      - models
+      summary: Get Model
+      operationId: get_model_api_v1_models__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Model Api V1 Models  Object Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/models/{object_id}/versions/{version}:
+    get:
+      tags:
+      - models
+      summary: Get Model Version
+      operationId: get_model_version_api_v1_models__object_id__versions__version__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Version
+      - name: include_data
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Data
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Model Version Api V1 Models  Object Id  Versions  Version  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/models/{object_id}/download:
+    get:
+      tags:
+      - models
+      summary: Download Model
+      operationId: download_model_api_v1_models__object_id__download_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/models/query:
+    post:
+      tags:
+      - models
+      summary: Query Models
+      operationId: query_models_api_v1_models_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObjectQueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    AggregationSpec:
+      properties:
+        operator:
+          type: string
+          enum:
+          - avg
+          - sum
+          - min
+          - max
+          title: Operator
+        field:
+          type: string
+          minLength: 1
+          title: Field
+      type: object
+      required:
+      - operator
+      - field
+      title: AggregationSpec
+      description: Aggregation operator and source field.
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ListResponse:
+      properties:
+        items:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Items
+        count:
+          type: integer
+          title: Count
+        limit:
+          type: integer
+          title: Limit
+      type: object
+      required:
+      - items
+      - count
+      - limit
+      title: ListResponse
+      description: Generic list envelope for collection endpoints.
+    ObjectQueryRequest:
+      properties:
+        filter:
+          additionalProperties: true
+          type: object
+          title: Filter
+        projection:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Projection
+        limit:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Limit
+          default: 100
+        sort:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/SortSpec'
+            type: array
+          - type: 'null'
+          title: Sort
+        aggregation:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/AggregationSpec'
+            type: array
+          - type: 'null'
+          title: Aggregation
+        remove_json_unserializables:
+          type: boolean
+          title: Remove Json Unserializables
+          default: true
+        include_data:
+          type: boolean
+          title: Include Data
+          default: false
+      type: object
+      title: ObjectQueryRequest
+      description: Object query payload with optional payload inclusion.
+    QueryRequest:
+      properties:
+        filter:
+          additionalProperties: true
+          type: object
+          title: Filter
+        projection:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Projection
+        limit:
+          type: integer
+          maximum: 1000.0
+          minimum: 0.0
+          title: Limit
+          default: 100
+        sort:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/SortSpec'
+            type: array
+          - type: 'null'
+          title: Sort
+        aggregation:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/AggregationSpec'
+            type: array
+          - type: 'null'
+          title: Aggregation
+        remove_json_unserializables:
+          type: boolean
+          title: Remove Json Unserializables
+          default: true
+      type: object
+      title: QueryRequest
+      description: Read-only query payload.
+    SortSpec:
+      properties:
+        field:
+          type: string
+          minLength: 1
+          title: Field
+        order:
+          type: integer
+          enum:
+          - 1
+          - -1
+          title: Order
+          default: 1
+      type: object
+      required:
+      - field
+      title: SortSpec
+      description: Sort field/order pair.
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

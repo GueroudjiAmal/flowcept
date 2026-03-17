@@ -26,6 +26,43 @@ Rules:
 - Underscores become hyphens (e.g., ``stream_messages`` → ``--stream-messages``).
 - Bool params work as flags (present/absent). Other params require a value.
 
+Configuration Profiles
+----------------------
+
+Flowcept provides quick settings profiles to switch between common runtime modes:
+
+.. code-block:: shell
+
+   flowcept --config-profile full-online
+   flowcept --config-profile full-offline
+
+Behavior:
+- Prints the exact settings keys that will change and their new values.
+- Prompts for confirmation before writing changes.
+- Writes to ``FLOWCEPT_SETTINGS_PATH`` when set; otherwise writes to ``~/.flowcept/settings.yaml``.
+
+Use ``-y`` (or ``--yes``) to skip the confirmation prompt:
+
+.. code-block:: shell
+
+   flowcept --config-profile full-online -y
+
+Current profile values:
+
+- ``full-online``:
+  - ``project.db_flush_mode: online``
+  - ``mq.enabled: true``
+  - ``kv_db.enabled: true``
+  - ``databases.mongodb.enabled: true``
+  - ``databases.lmdb.enabled: false``
+- ``full-offline``:
+  - ``project.db_flush_mode: offline``
+  - ``project.dump_buffer.enabled: true``
+  - ``mq.enabled: false``
+  - ``kv_db.enabled: false``
+  - ``databases.mongodb.enabled: false``
+  - ``databases.lmdb.enabled: false``
+
 Available commands
 ------------------
 

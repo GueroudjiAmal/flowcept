@@ -1,4 +1,4 @@
-flowcept_version: 0.9.17 # Version of the Flowcept package. This setting file is compatible with this version.
+flowcept_version: 0.10.1 # Version of the Flowcept package. Do not update this manually. The CI updates it. This setting file is compatible with this version.
 
 project:
   debug: true # Toggle debug mode. This will add a property `debug: true` to all saved data, making it easier to retrieve/delete them later.
@@ -10,6 +10,11 @@ project:
   dump_buffer: # This is particularly useful if you need to run completely offline. If you omit this, even offline, buffer data will not be persisted.
     enabled: false
     path: /tmp/diaspora-data/flowcept_buffer.jsonl
+    enabled: false # If true, persist the in-memory buffer to JSONL on disk during/at the end of a run.
+    path: flowcept_buffer.jsonl # Base JSONL path used by dump_buffer() and read_buffer_file() when no explicit path is passed.
+    append_id_to_path: true # If true, append a unique suffix to reduce collisions across parallel writers (e.g., *_<id>.jsonl).
+    append_workflow_id_to_path: true # If true, append the workflow_id before the file extension (e.g., *_<workflow_id>.jsonl).
+    delete_previous_file: false # If true, delete any existing buffer file at startup before writing a new one.
 
 log:
   log_path: "default" # Path for log file output; "default" will write the log in the directory where the main executable is running from.
@@ -62,6 +67,7 @@ mq:
   # uri: ?
   # instances: ["localhost:6379"] # We can have multiple MQ instances being accessed by the consumers but each interceptor will currently access one single MQ..
   port: 6379
+  # group_id: auto  # Kafka-only consumer group id. Use "auto" to generate a unique group per run.
   # group_file: mofka.json
   channel: interception
   buffer_size: 50
@@ -70,8 +76,8 @@ mq:
   # uri: use Redis connection uri here
   chunk_size: -1  # use 0 or -1 to disable this. Or simply omit this from the config file.
   same_as_kvdb: false # Set this to true if you are using the same Redis instance both as an MQ and as the KV_DB. In that case, no need to repeat connection parameters in MQ. Use only what you define in KV_DB.
-#  bin: /usr/local/bin/redis-server # Use this if you want to start redis using the flowcept-cli.
-#  conf_file: /etc/redis/redis.conf
+ bin: /usr/local/bin/redis-server # Use this if you want to start redis using the flowcept-cli.
+ conf_file: /etc/redis/redis.conf
 
 kv_db:
   host: localhost
@@ -101,77 +107,77 @@ db_buffer:
   stop_max_trials: 300    # Maximum number of trials before giving up when waiting for a fully safe stop (i.e., all records have been inserted as expected).
   stop_trials_sleep: 0.1  # Sleep duration (in seconds) between trials when waiting for a fully safe stop.
 
-# agent:
-#   enabled: false
-#   mcp_host: localhost
-#   mcp_port: 8000
-#   llm_server_url: '?'
-#   api_key: '?'
-#   model: '?'
-#   service_provider: '?'
-#   model_kwargs: {}
-#   audio_enabled: false
+agent:
+  enabled: false
+  mcp_host: localhost
+  mcp_port: 8000
+  llm_server_url: '?'
+  api_key: '?'
+  model: '?'
+  service_provider: '?'
+  model_kwargs: {}
+  audio_enabled: false
 
-# databases:
+databases:
 
-#   lmdb:
-#     enabled: true
-#     path: flowcept_lmdb
+  lmdb:
+    enabled: true
+    path: flowcept_lmdb
 
-#   mongodb:
-#     enabled: true
-#     host: localhost
-#     port: 27017
-#     db: flowcept
-#     create_collection_index: true  # Whether flowcept should create collection indices if they haven't been created yet. This is done only at the Flowcept start up.
-# #    bin: /usr/bin/mongod
-# #    db_path:
-# #    log_path: /var/log/mongodb/mongod.log
-# #    lock_file_path: /var/run/mongod.pid
+  mongodb:
+    enabled: true
+    host: localhost
+    port: 27017
+    db: flowcept
+    create_collection_index: true  # Whether flowcept should create collection indices if they haven't been created yet. This is done only at the Flowcept start up.
+#    bin: /usr/bin/mongod
+#    db_path:
+#    log_path: /var/log/mongodb/mongod.log
+#    lock_file_path: /var/run/mongod.pid
 
 
-# adapters:
-#   # For each key below, you can have multiple instances. Like mlflow1, mlflow2; zambeze1, zambeze2. Use an empty dict, {}, if you won't use any adapter.
+adapters:
+  # For each key below, you can have multiple instances. Like mlflow1, mlflow2; zambeze1, zambeze2. Use an empty dict, {}, if you won't use any adapter.
 
-#   broker_mqtt:
-#     kind: broker
-#     host: localhost
-#     port: 30011
-#     protocol: mqtt3.1.1
-#     queues: ["#"]
-#     username: postman
-#     password: p
-#     qos: 2
-#     task_subtype: intersect_msg
-#     tracked_keys:
-#       used: payload
-#       generated: ~
-#       custom_metadata: [headers, msgId]
-#       activity_id: operationId
-#       submitted_at: ~
-#       started_at: ~
-#       ended_at: ~
-#       registered_at: ~
+  broker_mqtt:
+    kind: broker
+    host: localhost
+    port: 30011
+    protocol: mqtt3.1.1
+    queues: ["#"]
+    username: postman
+    password: p
+    qos: 2
+    task_subtype: intersect_msg
+    tracked_keys:
+      used: payload
+      generated: ~
+      custom_metadata: [headers, msgId]
+      activity_id: operationId
+      submitted_at: ~
+      started_at: ~
+      ended_at: ~
+      registered_at: ~
 
-#   mlflow:
-#     kind: mlflow
-#     file_path: mlflow.db
-#     log_params: ['*']
-#     log_metrics: ['*']
-#     watch_interval_sec: 2
+  mlflow:
+    kind: mlflow
+    file_path: mlflow.db
+    log_params: ['*']
+    log_metrics: ['*']
+    watch_interval_sec: 2
 
-#   tensorboard:
-#     kind: tensorboard
-#     file_path: tensorboard_events
-#     log_tags: ['scalars', 'hparams', 'tensors']
-#     log_metrics: ['accuracy']
-#     watch_interval_sec: 5
+  tensorboard:
+    kind: tensorboard
+    file_path: tensorboard_events
+    log_tags: ['scalars', 'hparams', 'tensors']
+    log_metrics: ['accuracy']
+    watch_interval_sec: 5
 
-#   dask:
-#     kind: dask
-#     worker_should_get_input: true
-#     scheduler_should_get_input: true
-#     worker_should_get_output: true
-#     scheduler_create_timestamps: true
-#     worker_create_timestamps: false
+  dask:
+    kind: dask
+    worker_should_get_input: true
+    scheduler_should_get_input: true
+    worker_should_get_output: true
+    scheduler_create_timestamps: true
+    worker_create_timestamps: false
 

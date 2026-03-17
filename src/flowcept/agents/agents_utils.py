@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 from typing import Union, Dict
 
 from flowcept.flowceptor.consumers.agent.base_agent_context_manager import BaseAgentContextManager
@@ -137,8 +139,8 @@ def build_llm_model(
     if _service_provider == "sambanova":
         from langchain_community.llms.sambanova import SambaStudio
 
-        os.environ["SAMBASTUDIO_URL"] = AGENT.get("llm_server_url")
-        os.environ["SAMBASTUDIO_API_KEY"] = AGENT.get("api_key")
+        os.environ["SAMBASTUDIO_URL"] = os.environ.get("SAMBASTUDIO_URL", AGENT.get("llm_server_url"))
+        os.environ["SAMBASTUDIO_API_KEY"] = os.environ.get("SAMBASTUDIO_API_KEY", AGENT.get("api_key"))
 
         llm = SambaStudio(model_kwargs=_model_kwargs)
     elif _service_provider == "azure":
@@ -153,7 +155,16 @@ def build_llm_model(
         from langchain_openai import ChatOpenAI
 
         api_key = os.environ.get("OPENAI_API_KEY", AGENT.get("api_key", None))
-        llm = ChatOpenAI(openai_api_key=api_key, **model_kwargs)
+        base_url = os.environ.get("OPENAI_BASE_URL", AGENT.get("llm_server_url") or None)
+        org = os.environ.get("OPENAI_ORG_ID", AGENT.get("organization", None))
+
+        init_kwargs = {"api_key": api_key}
+        if base_url:
+            init_kwargs["base_url"] = base_url
+        if org:
+            init_kwargs["organization"] = org
+
+        llm = ChatOpenAI(**init_kwargs, **_model_kwargs)
     elif _service_provider == "google":
         if "claude" in _model_kwargs["model"]:
             api_key = os.environ.get("GOOGLE_API_KEY", AGENT.get("api_key", None))
@@ -166,22 +177,6 @@ def build_llm_model(
             from flowcept.agents.llms.gemini25 import Gemini25LLM
 
             llm = Gemini25LLM(**_model_kwargs)
-    elif _service_provider == "openai":
-        from langchain_openai import ChatOpenAI
-
-        api_key = os.environ.get("OPENAI_API_KEY", AGENT.get("api_key"))
-        base_url = os.environ.get("OPENAI_BASE_URL", AGENT.get("llm_server_url") or None)  # optional
-        org = os.environ.get("OPENAI_ORG_ID", AGENT.get("organization", None))  # optional
-
-        init_kwargs = {"api_key": api_key}
-        if base_url:
-            init_kwargs["base_url"] = base_url
-        if org:
-            init_kwargs["organization"] = org
-
-        # IMPORTANT: use the merged kwargs so `model` and temps flow through
-        llm = ChatOpenAI(**init_kwargs, **_model_kwargs)
-
     else:
         raise Exception("Currently supported providers are sambanova, openai, azure, and google.")
     if track_tools:
@@ -194,3 +189,43 @@ def build_llm_model(
             if tool_task:
                 llm.parent_task_id = tool_task.task_id
     return llm
+
+
+def normalize_message(user_msg: str) -> str:
+    """
+    Normalize a user message into a canonical, comparison-friendly form.
+
+    The function standardizes text by trimming whitespace, applying Unicode
+    normalization, normalizing dash characters, collapsing repeated whitespace,
+    removing trailing punctuation that does not affect semantics, and converting
+    the result to lowercase.
+
+    Parameters
+    ----------
+    user_msg : str
+        Raw user input message.
+
+    Returns
+    -------
+    str
+        Normalized message suitable for matching, comparison, or hashing.
+    """
+    # 1) Strip leading/trailing whitespace
+    user_msg = user_msg.strip()
+
+    # 2) Unicode normalize to avoid weird characters (like fancy quotes, dashes)
+    user_msg = unicodedata.normalize("NFKC", user_msg)
+
+    # 3) Normalize dashes commonly used in chemistry (C–H, C—H, etc.)
+    user_msg = user_msg.replace("–", "-").replace("—", "-")
+
+    # 4) Collapse multiple spaces / newlines into a single space
+    user_msg = re.sub(r"\s+", " ", user_msg)
+
+    # 5) Remove trailing punctuation that doesn't change semantics
+    #    e.g., "?", "!", "." at the VERY end
+    user_msg = re.sub(r"[?!.\s]+$", "", user_msg)
+
+    user_msg = user_msg.lower()
+
+    return user_msg

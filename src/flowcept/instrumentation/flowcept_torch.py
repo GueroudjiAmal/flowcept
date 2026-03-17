@@ -27,9 +27,52 @@ from flowcept.flowceptor.adapters.base_interceptor import BaseInterceptor
 from flowcept.flowceptor.adapters.instrumentation_interceptor import InstrumentationInterceptor
 from flowcept.instrumentation.flowcept_task import get_current_context_task_id
 
-TORCH_CONFIG = INSTRUMENTATION.get("torch")
+TORCH_CONFIG = INSTRUMENTATION.get("torch", {})
 
 REGISTER_WORKFLOW = TORCH_CONFIG.get("register_workflow", True)
+
+
+def _inspect_inner_modules(model, modules_dict=None, in_named=None, first_level_child=True):
+    """Inspect nested PyTorch modules and collect lightweight metadata."""
+    if modules_dict is None:
+        modules_dict = {}
+    if not isinstance(model, nn.Module):
+        return modules_dict
+    key = f"{model.__class__.__name__}_{id(model)}"
+    modules_dict[key] = {
+        "type": model.__class__.__name__,
+    }
+    if in_named is not None:
+        modules_dict[key]["in_named"] = in_named
+    modules_dict[key].update({k: v for k, v in model.__dict__.items() if not k.startswith("_")})
+    for name, module in model.named_children():
+        if first_level_child:
+            setattr(module, "first_level_child", True)
+        _inspect_inner_modules(module, modules_dict, in_named=name, first_level_child=False)
+    return modules_dict
+
+
+def get_torch_model_profile(model):
+    """Build a serializable profile for a PyTorch model."""
+    nparams = 0
+    max_width = -1
+    for p in model.parameters():
+        m = np.max(p.shape)
+        nparams += p.numel()
+        if m > max_width:
+            max_width = m
+
+    modules = _inspect_inner_modules(model)
+    if REPLACE_NON_JSON_SERIALIZABLE:
+        modules = replace_non_serializable(modules)
+
+    return {
+        "params": nparams,
+        "max_width": int(max_width),
+        "n_modules": len(modules),
+        "modules": modules,
+        "model_repr": repr(model),
+    }
 
 
 def flowcept_torch(cls):
@@ -212,28 +255,7 @@ def flowcept_torch(cls):
                 self._should_update_children_forward = True
 
         def _get_profile(self):
-            nparams = 0
-            max_width = -1
-            for p in self.parameters():
-                m = np.max(p.shape)
-                nparams += p.numel()
-                if m > max_width:
-                    max_width = m
-
-            modules = _inspect_inner_modules(self)
-            if REPLACE_NON_JSON_SERIALIZABLE:
-                modules = replace_non_serializable(modules)
-
-            # TODO: :ml-refactor: create a dataclass
-            this_result = {
-                "params": nparams,
-                "max_width": int(max_width),
-                "n_modules": len(modules),
-                "modules": modules,
-                "model_repr": repr(self),
-            }
-
-            return this_result
+            return get_torch_model_profile(self)
 
         def _update_children_with_our_forward(self):
             for name, child in self.named_children():
@@ -303,22 +325,6 @@ def flowcept_torch(cls):
             workflow_obj.custom_metadata = _custom_metadata
             TorchModuleWrapper._interceptor.send_workflow_message(workflow_obj)
             return workflow_obj.workflow_id
-
-    def _inspect_inner_modules(model, modules_dict={}, in_named=None, first_level_child=True):
-        if not isinstance(model, nn.Module):
-            return
-        key = f"{model.__class__.__name__}_{id(model)}"
-        modules_dict[key] = {
-            "type": model.__class__.__name__,
-        }
-        if in_named is not None:
-            modules_dict[key]["in_named"] = in_named
-        modules_dict[key].update({k: v for k, v in model.__dict__.items() if not k.startswith("_")})
-        for name, module in model.named_children():
-            if first_level_child:
-                setattr(module, "first_level_child", True)
-            _inspect_inner_modules(module, modules_dict, in_named=name, first_level_child=False)
-        return modules_dict
 
     def _get_our_child_forward_func(mode):
         """Pick the torch_task function."""

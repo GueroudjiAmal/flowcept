@@ -31,6 +31,7 @@ Flowcept captures and queries workflow provenance at runtime with minimal code c
 
 
 <h4 align="center">
+  <a href="https://flowcept.org">Website</a> &#8226;
   <a href="https://flowcept.readthedocs.io/">Documentation</a> &#8226; 
   <a href="./docs/publications">Publications</a>
 </h4>
@@ -136,6 +137,8 @@ This creates a provenance file in `flowcept_messages.jsonl`.  In it, you will se
 
 For online querying using databases, MCP agents and Grafana, telemetry, adapters (MLflow, Dask, TensorBoard), PyTorch and MCP instrumentation, HPC optimization or federated runs,
 and more, see the [Jupyter Notebooks](notebooks), the [Examples directory](examples) and the [complete documentation](https://flowcept.readthedocs.io/).
+To use the provenance agent with your favorite code assistant (for example, Codex or Claude), see the [Agents README](src/flowcept/agents/README.md).
+For an end-to-end workflow developer tutorial (default user guide), start with [docs/README.md](docs/README.md).
 
 ## Table of Contents
 

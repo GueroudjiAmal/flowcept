@@ -13,12 +13,14 @@ help:
 	@printf "\033[32mservices-mofka\033[0m            run services with Mofka using Docker\n"
 	@printf "\033[32mservices-stop-mofka\033[0m       stop Mofka services and remove attached volumes\n"
 	@printf "\033[32mtests\033[0m                     run unit tests with pytest\n"
+	@printf "\033[32mtests-offline\033[0m             run offline-safe tests with pytest\n"
 	@printf "\033[32mtests-in-container\033[0m        run unit tests with pytest inside Flowcept's container\n"
 	@printf "\033[32mtests-in-container-mongo\033[0m  run unit tests inside container with MongoDB\n"
 	@printf "\033[32mtests-in-container-kafka\033[0m  run unit tests inside container with Kafka and MongoDB\n"
 	@printf "\033[32mtests-notebooks\033[0m           test the notebooks using pytest\n"
 	@printf "\033[32mclean\033[0m                     remove cache directories and Sphinx build output\n"
 	@printf "\033[32mdocs\033[0m                      build HTML documentation using Sphinx\n"
+	@printf "\033[32mwebservice\033[0m                run the Flowcept webservice locally (FastAPI)\n"
 	@printf "\033[32mchecks\033[0m                    run ruff linter and formatter checks\n"
 	@printf "\033[32mreformat\033[0m                  run ruff linter and formatter\n"
 
@@ -51,7 +53,13 @@ clean:
 # Build the HTML documentation using Sphinx
 .PHONY: docs
 docs:
+	PYTHONPATH=src python docs/openapi/scripts/generate_openapi.py
 	sphinx-build -M html docs docs/_build
+	@echo "Docs built: open docs/_build/html/index.html"
+
+.PHONY: webservice
+webservice:
+	PYTHONPATH=src python -m flowcept.cli --start-webservice --webservice-host 127.0.0.1 --webservice-port 8008
 
 # Run services using Docker
 services:
@@ -77,13 +85,13 @@ run:
 	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=flowcept_redis -e MONGO_HOST=flowcept_mongo --network flowcept_default -it flowcept
 
 tests-in-container-mongo:
-	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=flowcept_redis -e MONGO_HOST=flowcept_mongo -e MONGO_ENABLED=true -e LMDB_ENABLED=false --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest --ignore=tests/instrumentation_tests/ml_tests
+	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=flowcept_redis -e MONGO_HOST=flowcept_mongo -e MONGO_ENABLED=true -e LMDB_ENABLED=false --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest tests --ignore=tests/instrumentation_tests/ml_tests
 
 tests-in-container:
-	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=flowcept_redis -e MONGO_ENABLED=false -e LMDB_ENABLED=true --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest --ignore=tests/instrumentation_tests/ml_tests
+	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=flowcept_redis -e MONGO_ENABLED=false -e LMDB_ENABLED=true --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest tests --ignore=tests/instrumentation_tests/ml_tests
 
 tests-in-container-kafka:
-	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=kafka -e MONGO_HOST=flowcept_mongo  -e MQ_PORT=29092 -e MQ_TYPE=kafka -e MONGO_ENABLED=true -e LMDB_ENABLED=false --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest --ignore=tests/instrumentation_tests/ml_tests
+	docker run --rm -v $(shell pwd):/flowcept -e KVDB_HOST=flowcept_redis -e MQ_HOST=kafka -e MONGO_HOST=flowcept_mongo  -e MQ_PORT=29092 -e MQ_TYPE=kafka -e MONGO_ENABLED=true -e LMDB_ENABLED=false --network flowcept_default flowcept /opt/conda/envs/flowcept/bin/pytest tests --ignore=tests/instrumentation_tests/ml_tests
 
 # This command can be removed once we have our CLI
 liveness:
@@ -115,7 +123,11 @@ services-stop-mofka:
 # Run unit tests using pytest
 .PHONY: tests
 tests:
-	pytest --ignore=tests/adapters/test_tensorboard.py
+	pytest tests --timeout=600 --ignore=tests/adapters/test_tensorboard.py
+
+.PHONY: tests-offline
+tests-offline:
+	pytest -m safeoffline tests --ignore=tests/adapters --ignore=tests/api --ignore=tests/doc_db_inserter --ignore=tests/misc_tests/singleton_test.py
 
 .PHONY: tests-notebooks
 tests-notebooks:

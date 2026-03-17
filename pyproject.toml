@@ -54,9 +54,12 @@ dependencies = [
 redis = ["redis"]
 lmdb = ["lmdb"]
 telemetry = ["psutil>=6.1.1", "py-cpuinfo"]
-extras = ["flowcept[redis]", "flowcept[telemetry]", "flowcept[mongo]", "GitPython", "pandas", "flask-restful", "requests"]
+extras = ["flowcept[redis]", "flowcept[telemetry]", "flowcept[mongo]", "GitPython", "pandas", "requests", "rich"]
+webservice = ["fastapi", "uvicorn", "pyyaml"]
+legacy_webservice = ["flask-restful"]
 
 analytics = ["seaborn", "plotly", "scipy", "matplotlib"]
+report_pdf = ["matplotlib", "reportlab", "networkx"]
 mongo = ["pymongo", "pyarrow"]
 dask = ["tomli", "dask[distributed]<=2024.10.0"]
 docs = ["sphinx", "furo"]
@@ -65,7 +68,7 @@ mlflow = ["mlflow-skinny", "SQLAlchemy", "alembic", "watchdog", "cryptography"]
 nvidia = ["nvidia-ml-py"]
 mqtt = ["paho-mqtt"]
 tensorboard = ["tensorboard", "tensorflow", "tbparse"]
-llm_agent = ["mcp[cli]", "langchain_community", "langchain_openai", "streamlit", "PyMuPDF", "matplotlib"]
+llm_agent = ["mcp[cli]", "langchain_community", "langchain_openai", "streamlit", "PyMuPDF", "matplotlib", "tabulate"]
 llm_google = ["flowcept[llm_agent]", "google-genai"]
 llm_agent_audio = ["flowcept[llm_agent]", "streamlit-mic-recorder", "SpeechRecognition", "pydub", "gTTS"]
 # System dependency (required for pydub)
@@ -80,8 +83,9 @@ dev = [
     "nbmake",
     "pika",
     "pytest",
+    "pytest-timeout",
     "ruff",
-    "pyyaml",
+    "pyyaml"
 ]
 # Torch and some other ml-specific libs, only used for dev purposes, require the following specific versions.
 ml_dev = [
@@ -96,6 +100,7 @@ ml_dev = [
 all = [
     "flowcept[telemetry]",
     "flowcept[extras]",
+    "flowcept[webservice]",
     "flowcept[redis]",
     "flowcept[lmdb]",
     "flowcept[mongo]",
@@ -105,6 +110,7 @@ all = [
     "flowcept[mlflow]",
     "flowcept[mqtt]",
     "flowcept[tensorboard]",
+    "flowcept[report_pdf]",
     "flowcept[dev]",
     "flowcept[llm_agent]",
     "flowcept[llm_google]"
@@ -128,6 +134,13 @@ packages = ["src/flowcept"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "resources/sample_settings.yaml" = "resources/sample_settings.yaml"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:websockets\\.legacy is deprecated:DeprecationWarning",
+    "ignore:websockets\\.server\\.WebSocketServerProtocol is deprecated:DeprecationWarning",
+    "ignore:Use `streamable_http_client` instead\\.:DeprecationWarning",
+]
 
 [project.scripts]
 flowcept = "flowcept.cli:main"

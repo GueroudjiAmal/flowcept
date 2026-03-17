@@ -4,6 +4,9 @@ from typing import Callable
 from time import time
 import msgpack
 
+import os
+from uuid import uuid4
+
 from confluent_kafka import Producer, Consumer, KafkaError
 from confluent_kafka.admin import AdminClient
 
@@ -12,6 +15,7 @@ from flowcept.configs import (
     MQ_CHANNEL,
     MQ_HOST,
     MQ_PORT,
+    MQ_GROUP_ID,
 )
 
 
@@ -29,9 +33,12 @@ class MQDaoKafka(MQDao):
 
     def subscribe(self):
         """Subscribe to the interception channel."""
+        group_id = MQ_GROUP_ID
+        if not group_id or group_id == "auto":
+            group_id = f"flowcept_{os.getpid()}_{uuid4().hex[:8]}"
         self._kafka_conf.update(
             {
-                "group.id": "my_group",
+                "group.id": group_id,
                 "auto.offset.reset": "earliest",
                 "enable.auto.commit": True,
             }
@@ -42,7 +49,7 @@ class MQDaoKafka(MQDao):
     def message_listener(self, message_handler: Callable):
         """Get message listener."""
         try:
-            while True:
+            while self._consumer is not None:
                 msg = self._consumer.poll(1.0)
                 if msg is None:
                     continue
@@ -59,7 +66,7 @@ class MQDaoKafka(MQDao):
         except Exception as e:
             self.logger.exception(e)
         finally:
-            self._consumer.close()
+            self.unsubscribe()
 
     def send_message(self, message: dict, channel=MQ_CHANNEL, serializer=msgpack.dumps):
         """Send the message."""

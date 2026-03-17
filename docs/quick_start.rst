@@ -95,13 +95,13 @@ You should see two tasks:
 Next Steps
 ----------
 
-- `Advanced provenance capture methods <https://flowcept.readthedocs.io/en/latest/prov_query.html>`_
-- `Provenance querying <https://flowcept.readthedocs.io/en/latest/prov_query.html>`_
-- `Telemetry capture <https://flowcept.readthedocs.io/en/latest/telemetry_capture.html>`_
+- :doc:`default_user_guide` (recommended end-to-end path for software developers)
+- `Advanced provenance capture methods <prov_query.html>`_
+- `Provenance querying <prov_query.html>`_
+- `Telemetry capture <telemetry_capture.html>`_
 
 Examples:
 
 - `Examples directory <https://github.com/ORNL/flowcept/tree/main/examples>`_
 - `Jupyter Notebooks <https://github.com/ORNL/flowcept/tree/main/notebooks>`_
-
 

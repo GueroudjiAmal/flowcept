@@ -1,3 +1,4 @@
+import multiprocessing
 import numpy as np
 import psutil
 import uuid
@@ -5,8 +6,12 @@ import random
 from unittest.mock import patch
 import pandas as pd
 from time import time, sleep
+import tempfile
+import os
+from pathlib import Path
 
 import unittest
+import pytest
 
 import flowcept
 from flowcept.commons.flowcept_logger import FlowceptLogger
@@ -58,9 +63,6 @@ def decorated_static_function3(x, y):
 @flowcept_task(output_names=("z", "w"))
 def decorated_static_function4(x, y):
     return 6, 7
-
-
-
 
 
 @lightweight_flowcept_task
@@ -126,6 +128,22 @@ def calculate_overheads(decorated, not_decorated):
     mean_diff = sum(abs(decorated[key] - not_decorated[key]) for key in keys) / len(keys)
     overheads = [mean_diff / not_decorated[key] * 100 for key in keys]
     return overheads
+
+
+@flowcept_task
+def _buffer_worker_task(x):
+    return x + 1
+
+
+def _buffer_worker(base_path: str, workflow_id: str):
+    with Flowcept(
+        workflow_id=workflow_id,
+        start_persistence=False,
+        save_workflow=False,
+        check_safe_stops=False,
+    ) as f:
+        _buffer_worker_task(1)
+        f.dump_buffer(path=base_path)
 
 
 def print_system_stats():
@@ -259,6 +277,47 @@ class DecoratorTests(unittest.TestCase):
                 assert t["generated"]["z"] == 6
                 assert t["generated"]["w"] == 7
 
+    @pytest.mark.safeoffline
+    def test_dump_buffer_offline_mode(self):
+        logger = FlowceptLogger()
+        if flowcept.configs.DB_FLUSH_MODE != "offline":
+            logger.warning(
+                "Skipping test_dump_buffer_offline_mode because "
+                f"DB_FLUSH_MODE is '{flowcept.configs.DB_FLUSH_MODE}', expected 'offline'."
+            )
+            return
+        if not flowcept.configs.DUMP_BUFFER_ENABLED:
+            logger.warning(
+                "Skipping test_dump_buffer_offline_mode because "
+                "DUMP_BUFFER_ENABLED is False; expected True to persist buffer."
+            )
+            return
+
+        buffer_path = Path(flowcept.configs.DUMP_BUFFER_PATH or "flowcept_buffer.jsonl")
+        if buffer_path.exists():
+            buffer_path.unlink()
+
+        with Flowcept(start_persistence=False):
+            decorated_static_function2(x=1)
+
+        stem = buffer_path.stem
+        suffix = buffer_path.suffix or ".jsonl"
+        if flowcept.configs.APPEND_WORKFLOW_ID_TO_PATH and Flowcept.current_workflow_id:
+            stem = f"{stem}_{Flowcept.current_workflow_id}"
+        if flowcept.configs.APPEND_ID_TO_PATH:
+            pattern = f"{stem}_*{suffix}"
+        else:
+            pattern = f"{stem}{suffix}"
+        matches = list(buffer_path.parent.glob(pattern))
+        assert matches
+        with matches[0].open("rb") as f:
+            first_line = f.readline()
+            assert first_line
+            assert b'"type":"workflow"' in first_line or b'"type":"task"' in first_line
+
+        for path in matches:
+            path.unlink()
+
     @patch("sys.argv", ["script_name", "--a", "123", "--b", "abc", "--unknown_arg", "unk", "['a']"])
     def test_argparse(self):
         known_args, unknown_args = parse_args()
@@ -274,6 +333,27 @@ class DecoratorTests(unittest.TestCase):
         assert task["used"]["known_args"]["a"] == 123
         assert task["used"]["known_args"]["b"] == "abc"
         assert task["used"]["unknown_args"] == ['--unknown_arg', 'unk', "['a']"]
+
+    def test_custom_metadata_non_serializable_is_sanitized(self):
+        def local_nonserializable_fn(x):
+            return x
+
+        with Flowcept():
+            @flowcept_task(custom_metadata={"non_serializable_obj": object(), "non_serializable_fn": local_nonserializable_fn})
+            def _local_decorated(x):
+                return {"y": x}
+
+            _local_decorated(x=7)
+
+            tasks = [msg for msg in Flowcept.buffer if isinstance(msg, dict) and msg.get("type") == "task"]
+            assert tasks
+            task = tasks[-1]
+        obj_value = task["custom_metadata"]["non_serializable_obj"]
+        fn_value = task["custom_metadata"]["non_serializable_fn"]
+        assert isinstance(obj_value, str)
+        assert obj_value.startswith("object_instance_id_")
+        assert isinstance(fn_value, str)
+        assert fn_value.startswith("function_instance_id_")
 
     def test_online_offline(self):
         flowcept.configs.DB_FLUSH_MODE = "offline"
@@ -292,6 +372,7 @@ class DecoratorTests(unittest.TestCase):
         print("Testing times with online mode")
         self.test_decorated_function_timed()
 
+    @pytest.mark.safeoffline
     def test_decorated_function_timed(self):
         print()
         times = []
@@ -326,4 +407,35 @@ class DecoratorTests(unittest.TestCase):
         print("Overheads: " + str(overheads))
         assert all(map(lambda v: v < threshold, overheads))
 
+    @pytest.mark.safeoffline
+    def test_consolidate_buffer_files(self):
+        print(flowcept.configs.SETTINGS_PATH)
+        if flowcept.configs.DB_FLUSH_MODE != "offline":
+            FlowceptLogger().warning("Skipping consolidate_buffer_files because DB_FLUSH_MODE is not offline.")
+            self.skipTest("DB_FLUSH_MODE is not offline.")
+        if not flowcept.configs.APPEND_WORKFLOW_ID_TO_PATH:
+            FlowceptLogger().warning("Skipping consolidate_buffer_files because append_workflow_id_to_path is false.")
+            self.skipTest("append_workflow_id_to_path is false.")
+        if not flowcept.configs.APPEND_ID_TO_PATH:
+            FlowceptLogger().warning("Skipping consolidate_buffer_files because append_id_to_path is false.")
+            self.skipTest("append_id_to_path is false.")
 
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_path = os.path.join(tmp_dir, "flowcept_buffer.jsonl")
+            workflow_id = str(uuid.uuid4())
+            n_procs = 3
+            procs = [
+                multiprocessing.Process(target=_buffer_worker, args=(base_path, workflow_id))
+                for _ in range(n_procs)
+            ]
+            for proc in procs:
+                proc.start()
+            for proc in procs:
+                proc.join()
+
+            pattern = f"flowcept_buffer_{workflow_id}_*.jsonl"
+            matches = list(Path(tmp_dir).glob(pattern))
+            assert len(matches) == n_procs
+
+            msgs = Flowcept.read_buffer_file(file_path=base_path, consolidate=True, workflow_id=workflow_id)
+            assert len(msgs) == n_procs

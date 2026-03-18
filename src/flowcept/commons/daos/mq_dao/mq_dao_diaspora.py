@@ -24,10 +24,9 @@ class MQDaoDiaspora(MQDao):
         super().__init__(adapter_settings=adapter_settings)
         self.producer = None
         if with_producer:
-            print("Starting producer")
-            self.producer = MQDaoDiaspora._topic.producer(
-                "p" + MQ_CHANNEL
-            )
+            producer_name = "p" + MQ_CHANNEL + "-" + str(uuid.uuid4())[:8]
+            print(f"Starting producer {producer_name}")
+            self.producer = MQDaoDiaspora._topic.producer(producer_name)
 
     def subscribe(self):
         """Subscribe to Diaspora topic."""
@@ -65,27 +64,22 @@ class MQDaoDiaspora(MQDao):
 
     def _bulk_publish(self, buffer, channel=MQ_CHANNEL, serializer=msgpack.dumps):
         try:
-            # self.logger.debug(f"Going to send Message:\n\t[BEGIN_MSG]{buffer}\n[END_MSG]\t")
             for m in buffer:
-                self.producer.push(m)
-
+                self.producer.push(metadata=m)
         except Exception as e:
             self.logger.exception(e)
             self.logger.error("Some messages couldn't be flushed! Check the messages' contents!")
             self.logger.error(f"Message that caused error: {buffer}")
         try:
             self.producer.flush()
-            # self.logger.info(f"Flushed {len(buffer)} msgs to MQ!")
         except Exception as e:
             self.logger.exception(e)
 
     def _bulk_publish_timed(self, buffer, channel=MQ_CHANNEL, serializer=msgpack.dumps):
         total = 0
         try:
-            # self.logger.debug(f"Going to send Message:\n\t[BEGIN_MSG]{buffer}\n[END_MSG]\t")
-
             for m in buffer:
-                self.producer.push(m)
+                self.producer.push(metadata=m)
                 total += len(str(m).encode())
 
         except Exception as e:

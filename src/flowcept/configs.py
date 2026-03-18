@@ -33,6 +33,7 @@ USE_DEFAULT = os.getenv("FLOWCEPT_USE_DEFAULT", "False").lower() in _TRUE_VALUES
 
 if USE_DEFAULT:
     settings = DEFAULT_SETTINGS.copy()
+    SETTINGS_PATH = None
 
 else:
     from omegaconf import OmegaConf

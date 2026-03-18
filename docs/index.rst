@@ -43,24 +43,35 @@ Flowcept
    <div class="hero">
      <h4>Lightweight Distributed Workflow Provenance</h4>
    </div>
-   <p class=\\"tagline\\">
+  <p class="tagline">
      Flowcept captures and queries workflow provenance at runtime with minimal code changes and low overhead.
      It unifies data from diverse tools and workflows across the Edge–Cloud–HPC continuum and provides ML-aware capture,
      MCP agents provenance, telemetry, extensible adapters, and flexible storage.
    </p>
+
+.. important::
+
+   Start here: :doc:`default_user_guide` (recommended first read for workflow developers).
+   Full markdown version in repo: `docs/README.md <https://github.com/ORNL/flowcept/blob/main/docs/README.md>`_.
 
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
+   default_user_guide
    quick_start
    architecture
    setup
+   agent
    prov_capture
    telemetry_capture
    prov_storage
+   blob_data
+   blob_versioned_single_layer_perceptron_example
+   reporting
    prov_query
+   rest_api
    schemas
    contributing
    cli-reference

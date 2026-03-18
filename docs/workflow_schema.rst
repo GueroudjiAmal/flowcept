@@ -50,6 +50,9 @@ Workflow Fields
 - **name** (str):
   Human-readable name for the workflow (e.g., "training-run-001").
 
+- **subtype** (str):
+  Optional workflow subtype/category (e.g., ``ml_workflow``).
+
 - **custom_metadata** (dict):
   User-defined metadata for extended tagging or traceability.
 

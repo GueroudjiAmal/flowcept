@@ -1,16 +1,23 @@
 """Controller module."""
 
 import os
+from pathlib import Path
 from typing import List, Dict, Any
 from uuid import uuid4
 
+import flowcept
 from flowcept.commons.autoflush_buffer import AutoflushBuffer
 from flowcept.commons.daos.mq_dao.mq_dao_base import MQDao
 from flowcept.commons.flowcept_dataclasses.workflow_object import (
     WorkflowObject,
 )
 from flowcept.commons.flowcept_logger import FlowceptLogger
-from flowcept.commons.utils import ClassProperty, buffer_to_disk
+from flowcept.commons.utils import (
+    ClassProperty,
+    buffer_to_disk,
+    resolve_dump_buffer_path,
+    generate_pseudo_id,
+)
 from flowcept.configs import (
     MQ_INSTANCES,
     INSTRUMENTATION_ENABLED,
@@ -20,6 +27,8 @@ from flowcept.configs import (
     KVDB_ENABLED,
     MQ_ENABLED,
     DUMP_BUFFER_PATH,
+    APPEND_WORKFLOW_ID_TO_PATH,
+    APPEND_ID_TO_PATH,
 )
 from flowcept.flowceptor.adapters.base_interceptor import BaseInterceptor
 
@@ -49,11 +58,12 @@ class Flowcept(object):
         campaign_id: str = None,
         workflow_id: str = None,
         workflow_name: str = None,
+        workflow_subtype: str = None,
         workflow_args: Dict = None,
         start_persistence=True,
         check_safe_stops=True,  # TODO add to docstring
         save_workflow=True,
-        delete_buffer_file=True,
+        delete_buffer_file=None,
         *args,
         **kwargs,
     ):
@@ -83,6 +93,10 @@ class Flowcept(object):
         workflow_name : str, optional
             A descriptive name for the workflow.
 
+        workflow_subtype : str, optional
+            Optional subtype for workflow categorization
+            (e.g., ``ml_workflow``, ``data_prep_workflow``).
+
         workflow_args : str, optional
             Additional arguments related to the workflow.
 
@@ -92,8 +106,9 @@ class Flowcept(object):
         save_workflow : bool, default=True
             If True, a workflow object message is sent.
 
-        delete_buffer_file : bool, default=True
-            if True, deletes an existing existing buffer file or ignores if it doesn't exist.
+        delete_buffer_file : bool or None, optional
+            If True, deletes any existing dump buffer file on startup.
+            If None, uses project.dump_buffer.delete_previous_file from settings.yaml.
 
         Additional arguments (`*args`, `**kwargs`) are used for specific adapters.
             For example, when using the Dask interceptor, the `dask_client` argument
@@ -105,10 +120,6 @@ class Flowcept(object):
         self._db_inserters: List = []
         self.buffer = None
         self._check_safe_stops = check_safe_stops
-        if bundle_exec_id is None:
-            self.bundle_exec_id = str(id(self))
-        else:
-            self.bundle_exec_id = str(bundle_exec_id)
 
         self.enabled = True
         self.is_started = False
@@ -131,10 +142,19 @@ class Flowcept(object):
         self._workflow_saved = False  # This is to ensure that the wf is saved only once.
         self.current_workflow_id = workflow_id or str(uuid4())
         self.campaign_id = campaign_id or str(uuid4())
-        self.workflow_name = workflow_name
-        self.workflow_args = workflow_args
 
-        if delete_buffer_file:
+        if bundle_exec_id is None:
+            self.bundle_exec_id = self.current_workflow_id + generate_pseudo_id()
+        else:
+            self.bundle_exec_id = str(bundle_exec_id)
+
+        self.workflow_name = workflow_name
+        self.workflow_subtype = workflow_subtype
+        self.workflow_args = workflow_args
+        should_delete_buffer_file = (
+            flowcept.configs.DELETE_BUFFER_FILE if delete_buffer_file is None else delete_buffer_file
+        )
+        if should_delete_buffer_file:
             Flowcept.delete_buffer_file()
 
     def start(self):
@@ -256,10 +276,23 @@ class Flowcept(object):
         """
         if path is None:
             path = DUMP_BUFFER_PATH
+        path = resolve_dump_buffer_path(
+            path,
+            self.current_workflow_id,
+            APPEND_WORKFLOW_ID_TO_PATH,
+            APPEND_ID_TO_PATH,
+        )
         buffer_to_disk(self.buffer, path, self.logger)
 
     @staticmethod
-    def read_buffer_file(file_path: str | None = None, return_df: bool = False, normalize_df: bool = False):
+    def read_buffer_file(
+        file_path: str | None = None,
+        return_df: bool = False,
+        normalize_df: bool = False,
+        consolidate: bool = False,
+        workflow_id: str | None = None,
+        cleanup_files: bool = True,
+    ):
         """
         Read a JSON Lines (JSONL) file containing captured Flowcept messages.
 
@@ -281,6 +314,13 @@ class Flowcept(object):
         normalize_df: bool, default False
             If True, normalize the inner dicts (e.g., used, generated, custom_metadata) as individual columns in the
             returned DataFrame.
+        consolidate: bool, default False
+            If True, merge all matching workflow buffer files into a single JSONL file first.
+        workflow_id : str, optional
+            Workflow ID to use when consolidating buffer files.
+        cleanup_files : bool, default True
+            If True, delete consolidated input files and keep a single JSONL file
+            with only the workflow ID appended to the base path.
 
         Returns
         -------
@@ -318,9 +358,17 @@ class Flowcept(object):
 
         if file_path is None:
             file_path = DUMP_BUFFER_PATH
+        if consolidate:
+            if workflow_id is None:
+                raise ValueError("workflow_id must be provided when consolidate=True.")
+            file_path = Flowcept._consolidate_buffer_file(file_path, workflow_id, cleanup_files=cleanup_files)
         assert file_path is not None, "Please indicate file_path either in the argument or in the config file."
         if not os.path.exists(file_path):
-            raise FileNotFoundError(f"Flowcept buffer file '{file_path}' was not found.")
+            raise FileNotFoundError(
+                f"Flowcept buffer file '{file_path}' was not found. "
+                f"Check your settings to see if you're dumping the data to a file and check if you"
+                f"have started Flowcept."
+            )
 
         with open(file_path, "rb") as f:
             lines = [ln for ln in f.read().splitlines() if ln]
@@ -338,6 +386,69 @@ class Flowcept(object):
                 return pd.read_json(file_path, lines=True)
 
         return buffer
+
+    @staticmethod
+    def generate_report(
+        report_type: str = "provenance_card",
+        format: str = "markdown",
+        print_markdown: bool = False,
+        output_path: str | None = None,
+        input_jsonl_path: str | None = None,
+        records: List[Dict[str, Any]] | None = None,
+        workflow_id: str | None = None,
+        campaign_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """Generate a Flowcept report from JSONL, records, or DB data.
+
+        Parameters
+        ----------
+        report_type : str, optional
+            Report identifier. Supported values are ``"provenance_card"`` and
+            ``"provenance_report"``. Default is ``"provenance_card"``.
+        format : str, optional
+            Output format. ``"provenance_card"`` supports only ``"markdown"``,
+            and ``"provenance_report"`` supports only ``"pdf"``.
+            Default is ``"markdown"``.
+        print_markdown : bool, optional
+            When ``True`` and ``format="markdown"``, render the generated
+            markdown report to the terminal using Rich (install it with pip install flowcept[extras])
+        output_path : str, optional
+            Destination path for the generated report file.
+        input_jsonl_path : str, optional
+            Path to a Flowcept JSONL buffer file used as report input.
+        records : list of dict, optional
+            In-memory workflow/task/object records used as report input.
+        workflow_id : str, optional
+            Workflow identifier for DB query mode.
+        campaign_id : str, optional
+            Campaign identifier for DB query mode.
+
+        Returns
+        -------
+        dict
+            Report generation metadata including output path and input mode.
+
+        Raises
+        ------
+        ValueError
+            If input-mode selection or report type/format is invalid.
+        FileNotFoundError
+            If ``input_jsonl_path`` is selected but the file does not exist.
+        ModuleNotFoundError
+            If ``print_markdown=True`` without Rich installed.
+        """
+        from flowcept.report.service import generate_report
+
+        return generate_report(
+            report_type=report_type,
+            format=format,
+            print_markdown=print_markdown,
+            output_path=output_path,
+            input_jsonl_path=input_jsonl_path,
+            records=records,
+            workflow_id=workflow_id,
+            campaign_id=campaign_id,
+        )
 
     @staticmethod
     def delete_buffer_file(path: str = None):
@@ -383,6 +494,67 @@ class Flowcept(object):
             FlowceptLogger().error(f"Failed to delete buffer file: {path}")
             FlowceptLogger().exception(e)
 
+    @staticmethod
+    def _consolidate_buffer_file(path: str, workflow_id: str, cleanup_files: bool = True) -> str:
+        """
+        Consolidate all buffer files for a workflow into a single JSONL file.
+
+        Parameters
+        ----------
+        path : str
+            Base buffer path (e.g., flowcept_buffer.jsonl).
+        workflow_id : str
+            Workflow ID to match in buffer filenames.
+
+        Returns
+        -------
+        str
+            Path to the consolidated buffer file.
+        """
+        base_path = Path(path)
+        suffix = base_path.suffix
+        name_base = base_path.stem
+        pattern = f"{name_base}_{workflow_id}*{suffix}" if suffix else f"{name_base}_{workflow_id}*"
+        matches = sorted(base_path.parent.glob(pattern))
+        if not matches:
+            if base_path.exists():
+                return str(base_path)
+            raise FileNotFoundError(f"No buffer files found for workflow_id={workflow_id} at {base_path.parent}")
+        consolidated_name = f"{name_base}_{workflow_id}{suffix}" if suffix else f"{name_base}_{workflow_id}"
+        consolidated_path = base_path.with_name(consolidated_name)
+
+        if matches == [consolidated_path]:
+            return str(consolidated_path)
+
+        with open(consolidated_path, "wb") as out_handle:
+            for path_obj in matches:
+                if path_obj == consolidated_path:
+                    continue
+                with open(path_obj, "rb") as in_handle:
+                    data = in_handle.read()
+                    if not data:
+                        continue
+                    out_handle.write(data)
+                    if not data.endswith(b"\n"):
+                        out_handle.write(b"\n")
+
+        if cleanup_files:
+            removed = 0
+            for path_obj in matches:
+                if path_obj == consolidated_path:
+                    continue
+                try:
+                    path_obj.unlink()
+                    removed += 1
+                except Exception:
+                    continue
+            FlowceptLogger().info(
+                f"Consolidated {len(matches)} buffer files into {consolidated_path}. "
+                f"Removed {removed} intermediate files."
+            )
+
+        return str(consolidated_path)
+
     def save_workflow(self, interceptor: str, interceptor_instance: BaseInterceptor):
         """
         Save the current workflow and send its metadata using the provided interceptor.
@@ -406,6 +578,8 @@ class Flowcept(object):
 
         if self.workflow_name:
             wf_obj.name = self.workflow_name
+        if self.workflow_subtype:
+            wf_obj.subtype = self.workflow_subtype
         if self.workflow_args:
             wf_obj.used = self.workflow_args
 
@@ -452,6 +626,16 @@ class Flowcept(object):
             self.logger.info("Stopping DB Inserters...")
             for db_inserter in self._db_inserters:
                 db_inserter.stop(bundle_exec_id=self.bundle_exec_id)
+
+        try:
+            from flowcept.commons.daos.docdb_dao.docdb_dao_base import DocumentDBDAO
+
+            if DocumentDBDAO._instance is not None:
+                DocumentDBDAO._instance.close()
+                Flowcept._db = None
+        except Exception:
+            # Keep stop() resilient in configurations where DocDB backends are disabled.
+            pass
 
         Flowcept.buffer = self.buffer = None
         self.is_started = False

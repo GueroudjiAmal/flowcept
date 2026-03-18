@@ -9,6 +9,7 @@ Data Schemas for Flowcept data.
 
    task_schema
    workflow_schema
+   blob_schema
 
 PROV-AGENT and Flowcept
 =======================

@@ -1,8 +1,10 @@
 import unittest
 from uuid import uuid4
+from unittest.mock import patch
 
 from flowcept.commons.flowcept_dataclasses.task_object import TaskObject
-from flowcept import Flowcept, WorkflowObject
+from flowcept.commons.daos.docdb_dao.docdb_dao_base import DocumentDBDAO
+from flowcept import BlobObject, Flowcept, WorkflowObject
 from flowcept.configs import MONGO_ENABLED
 from flowcept.flowceptor.telemetry_capture import TelemetryCapture
 
@@ -17,6 +19,12 @@ class OurObject:
 
 
 class DBAPITest(unittest.TestCase):
+    def tearDown(self):
+        """Close shared DAO singleton to avoid leaked DB clients between tests."""
+        instance = DocumentDBDAO._instance
+        if instance is not None:
+            instance.close()
+
     def test_wf_dao(self):
         workflow1_id = str(uuid4())
         wf1 = WorkflowObject()
@@ -71,6 +79,360 @@ class DBAPITest(unittest.TestCase):
         loaded_obj = pickle.loads(obj_docs[0]["data"])
         assert type(loaded_obj) == OurObject
 
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_object_query_and_get(self):
+        payload = b"blob-content"
+        with Flowcept(workflow_name="blob_demo"):
+            obj_id = Flowcept.db.save_or_update_object(
+                object=payload,
+                task_id="task_blob_1",
+                type="artifact",
+                custom_metadata={"owner": "tests"},
+                save_data_in_collection=True,
+            )
+            expected_wf_id = Flowcept.current_workflow_id
+
+            docs = Flowcept.db.blob_object_query(filter={"object_id": obj_id})
+            assert docs is not None
+            assert len(docs) == 1
+            assert docs[0]["object_id"] == obj_id
+            assert docs[0]["data"] == payload
+
+            blob = Flowcept.db.get_blob_object(obj_id)
+            assert isinstance(blob, BlobObject)
+            assert blob.object_id == obj_id
+            assert blob.task_id == "task_blob_1"
+            assert blob.workflow_id == expected_wf_id
+            assert blob.type == "artifact"
+            assert blob.custom_metadata["owner"] == "tests"
+            assert blob.version == 0
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_object_version_control(self):
+        obj_id = str(uuid4())
+        payload_v0 = b"v0"
+        Flowcept.db.save_or_update_object(
+            object=payload_v0,
+            object_id=obj_id,
+            type="artifact",
+            save_data_in_collection=True,
+        )
+        blob_v0 = Flowcept.db.get_blob_object(obj_id)
+        assert blob_v0.version == 0
+        doc_v0 = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+        assert doc_v0["data"] == payload_v0
+
+        payload_v1 = b"v1"
+        Flowcept.db.save_or_update_object(
+            object=payload_v1,
+            object_id=obj_id,
+            type="artifact",
+            save_data_in_collection=True,
+        )
+        blob_v1 = Flowcept.db.get_blob_object(obj_id)
+        assert blob_v1.version == 1
+        doc_v1 = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+        assert doc_v1["data"] == payload_v1
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_object_store_in_gridfs(self):
+        with Flowcept(workflow_name="blob_gridfs_test"):
+            expected_wf_id = Flowcept.current_workflow_id
+            payload = b"gridfs-content-v0"
+            obj_id = Flowcept.db.save_or_update_object(
+                object=payload,
+                task_id="task_gridfs_1",
+                type="artifact",
+                save_data_in_collection=False,
+            )
+
+            blob = Flowcept.db.get_blob_object(obj_id)
+            assert blob.workflow_id == expected_wf_id
+            assert blob.version == 0
+
+            doc = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+            assert "data" not in doc
+            assert "grid_fs_file_id" in doc
+            retrieved = Flowcept.db._dao().get_file_data(doc["grid_fs_file_id"])
+            assert retrieved == payload
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_object_store_in_gridfs_update(self):
+        with Flowcept(workflow_name="blob_gridfs_update_test"):
+            expected_wf_id = Flowcept.current_workflow_id
+            obj_id = str(uuid4())
+            payload_v0 = b"gridfs-content-v0"
+            Flowcept.db.save_or_update_object(
+                object=payload_v0,
+                object_id=obj_id,
+                type="artifact",
+                save_data_in_collection=False,
+            )
+
+            doc_v0 = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+            retrieved_v0 = Flowcept.db._dao().get_file_data(doc_v0["grid_fs_file_id"])
+            assert retrieved_v0 == payload_v0
+
+            payload_v1 = b"gridfs-content-v1"
+            Flowcept.db.save_or_update_object(
+                object=payload_v1,
+                object_id=obj_id,
+                type="artifact",
+                save_data_in_collection=False,
+            )
+
+            blob_v1 = Flowcept.db.get_blob_object(obj_id)
+            assert blob_v1.workflow_id == expected_wf_id
+            assert blob_v1.version == 1
+
+            doc_v1 = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+            assert "data" not in doc_v1
+            assert "grid_fs_file_id" in doc_v1
+            retrieved_v1 = Flowcept.db._dao().get_file_data(doc_v1["grid_fs_file_id"])
+            assert retrieved_v1 == payload_v1
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_fingerprint_and_equality_in_object(self):
+        with Flowcept(workflow_name="blob_fingerprint_test"):
+            payload = b"equal-payload"
+            obj_id_a = Flowcept.db.save_or_update_object(
+                object=payload,
+                type="artifact",
+                save_data_in_collection=True,
+            )
+            obj_id_b = Flowcept.db.save_or_update_object(
+                object=payload,
+                type="artifact",
+                save_data_in_collection=True,
+            )
+            obj_id_c = Flowcept.db.save_or_update_object(
+                object=b"different-payload",
+                type="artifact",
+                save_data_in_collection=True,
+            )
+
+            fp_a = Flowcept.db.get_blob_fingerprint(obj_id_a)
+            assert fp_a["data_hash_algo"] == "sha256"
+            assert fp_a["data_sha256"] is not None
+            assert fp_a["object_size_bytes"] == len(payload)
+
+            assert Flowcept.db.blob_objects_equal(obj_id_a, obj_id_b)
+            assert not Flowcept.db.blob_objects_equal(obj_id_a, obj_id_c)
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_blob_fingerprint_and_equality_gridfs(self):
+        with Flowcept(workflow_name="blob_fingerprint_gridfs_test"):
+            payload = b"gridfs-equal-payload"
+            obj_id_a = Flowcept.db.save_or_update_object(
+                object=payload,
+                type="artifact",
+                save_data_in_collection=False,
+            )
+            obj_id_b = Flowcept.db.save_or_update_object(
+                object=payload,
+                type="artifact",
+                save_data_in_collection=False,
+            )
+            obj_id_c = Flowcept.db.save_or_update_object(
+                object=b"gridfs-different-payload",
+                type="artifact",
+                save_data_in_collection=False,
+            )
+
+            fp_a = Flowcept.db.get_blob_fingerprint(obj_id_a)
+            assert fp_a["storage_type"] == "gridfs"
+            assert fp_a["data_hash_algo"] == "sha256"
+            assert fp_a["data_sha256"] is not None
+
+            assert Flowcept.db.blob_objects_equal(obj_id_a, obj_id_b)
+            assert not Flowcept.db.blob_objects_equal(obj_id_a, obj_id_c)
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_ml_model_aliases(self):
+        payload = b"model-bytes"
+        with Flowcept(workflow_name="ml_model_alias_test"):
+            obj_id = Flowcept.db.save_or_update_ml_model(
+                object=payload,
+                task_id="task_model_1",
+                save_data_in_collection=True,
+            )
+            expected_wf_id = Flowcept.current_workflow_id
+
+            blob = Flowcept.db.get_ml_model(obj_id)
+            assert isinstance(blob, BlobObject)
+            assert blob.object_id == obj_id
+            assert blob.type == "ml_model"
+            assert blob.task_id == "task_model_1"
+            assert blob.workflow_id == expected_wf_id
+
+            docs = Flowcept.db.ml_model_query(filter={"object_id": obj_id, "type": "ml_model"})
+            assert docs is not None
+            assert len(docs) == 1
+            assert docs[0]["data"] == payload
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_dataset_aliases(self):
+        payload = b"dataset-bytes"
+        with Flowcept(workflow_name="dataset_alias_test"):
+            obj_id = Flowcept.db.save_or_update_dataset(
+                object=payload,
+                task_id="task_dataset_1",
+                save_data_in_collection=True,
+            )
+            expected_wf_id = Flowcept.current_workflow_id
+
+            blob = Flowcept.db.get_dataset(obj_id)
+            assert isinstance(blob, BlobObject)
+            assert blob.object_id == obj_id
+            assert blob.type == "dataset"
+            assert blob.task_id == "task_dataset_1"
+            assert blob.workflow_id == expected_wf_id
+
+            docs = Flowcept.db.dataset_query(filter={"object_id": obj_id, "type": "dataset"})
+            assert docs is not None
+            assert len(docs) == 1
+            assert docs[0]["data"] == payload
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_save_object_defaults_workflow_id_from_current_workflow(self):
+        with Flowcept(workflow_name="blob_default_wf_test"):
+            current_wf_id = Flowcept.current_workflow_id
+            obj_id = Flowcept.db.save_or_update_object(
+                object=b"default-wf-content",
+                task_id="task_default_wf",
+                type="artifact",
+                save_data_in_collection=True,
+            )
+
+        blob = Flowcept.db.get_blob_object(obj_id)
+        assert blob.workflow_id == current_wf_id
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_control_version_first_insert(self):
+        with Flowcept(workflow_name="blob_control_first_insert"):
+            payload = b"cv-v1"
+            obj_id = Flowcept.db.save_or_update_object(
+                object=payload,
+                task_id="task_cv_1",
+                type="artifact",
+                save_data_in_collection=True,
+                control_version=True,
+            )
+            latest = Flowcept.db.query(filter={"object_id": obj_id}, collection="objects")[0]
+            assert latest["version"] == 0
+            assert latest["prev_version"] is None
+            assert "created_at" in latest
+            assert "updated_at" in latest
+            history_docs = Flowcept.db.query(filter={"object_id": obj_id}, collection="object_history")
+            assert len(history_docs) == 0
+            blob_latest = Flowcept.db.get_blob_object(obj_id)
+            assert blob_latest.version == 0
+            assert getattr(blob_latest, "data") == payload
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_control_version_update_and_history_in_object(self):
+        with Flowcept(workflow_name="blob_control_update_in_object"):
+            payload_v1 = b"cv-in-object-v1"
+            payload_v2 = b"cv-in-object-v2"
+            obj_id = Flowcept.db.save_or_update_object(
+                object=payload_v1,
+                type="artifact",
+                save_data_in_collection=True,
+                control_version=True,
+            )
+            Flowcept.db.save_or_update_object(
+                object=payload_v2,
+                object_id=obj_id,
+                type="artifact",
+                save_data_in_collection=True,
+                control_version=True,
+            )
+
+            latest = Flowcept.db.get_blob_object(obj_id)
+            hist = Flowcept.db.get_blob_object(obj_id, version=0)
+            assert latest.version == 1
+            assert getattr(latest, "data") == payload_v2
+            assert hist.version == 0
+            assert getattr(hist, "data") == payload_v1
+
+            history_docs = Flowcept.db.query(filter={"object_id": obj_id}, collection="object_history")
+            assert len(history_docs) == 1
+            assert history_docs[0]["version"] == 0
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_control_version_update_and_history_gridfs(self):
+        with Flowcept(workflow_name="blob_control_update_gridfs"):
+            payload_v1 = b"cv-gridfs-v1"
+            payload_v2 = b"cv-gridfs-v2"
+            obj_id = Flowcept.db.save_or_update_object(
+                object=payload_v1,
+                type="artifact",
+                save_data_in_collection=False,
+                control_version=True,
+            )
+            Flowcept.db.save_or_update_object(
+                object=payload_v2,
+                object_id=obj_id,
+                type="artifact",
+                save_data_in_collection=False,
+                control_version=True,
+            )
+            latest = Flowcept.db.get_blob_object(obj_id)
+            hist = Flowcept.db.get_blob_object(obj_id, version=0)
+            assert latest.version == 1
+            assert getattr(latest, "data") == payload_v2
+            assert hist.version == 0
+            assert getattr(hist, "data") == payload_v1
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_get_object_history(self):
+        with Flowcept(workflow_name="blob_list_versions"):
+            obj_id = Flowcept.db.save_or_update_object(
+                object=b"lv-v1",
+                save_data_in_collection=True,
+                control_version=True,
+            )
+            Flowcept.db.save_or_update_object(
+                object=b"lv-v2",
+                object_id=obj_id,
+                save_data_in_collection=True,
+                control_version=True,
+            )
+            versions = Flowcept.db.get_object_history(obj_id)
+            assert [v["version"] for v in versions] == [1, 0]
+            assert versions[0]["storage_type"] == "in_object"
+            assert "data" not in versions[0]
+            assert "grid_fs_file_id" not in versions[0]
+
+    @unittest.skipIf(not MONGO_ENABLED, "MongoDB is disabled")
+    def test_control_version_retry_on_cas_mismatch(self):
+        with Flowcept(workflow_name="blob_cas_retry"):
+            obj_id = Flowcept.db.save_or_update_object(
+                object=b"cas-v1",
+                save_data_in_collection=True,
+                control_version=True,
+            )
+            dao = Flowcept.db._dao()
+            original = dao._update_with_optional_transaction
+            calls = {"n": 0}
+
+            def flaky_update(*args, **kwargs):
+                if calls["n"] == 0:
+                    calls["n"] += 1
+                    return 0
+                return original(*args, **kwargs)
+
+            with patch.object(dao, "_update_with_optional_transaction", side_effect=flaky_update):
+                Flowcept.db.save_or_update_object(
+                    object=b"cas-v2",
+                    object_id=obj_id,
+                    save_data_in_collection=True,
+                    control_version=True,
+                )
+
+            latest = Flowcept.db.get_blob_object(obj_id)
+            assert latest.version == 1
+
     @unittest.skip("Test only for dev.")
     def test_tasks_recursive(self):
         mapping = {
@@ -124,4 +486,3 @@ class DBAPITest(unittest.TestCase):
         Flowcept.db._dao().delete_tasks_with_filter(_filter)
         c1 = Flowcept.db._dao().count_tasks()
         assert c0 == c1
-

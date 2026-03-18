@@ -21,6 +21,11 @@ def __getattr__(name):
 
         return TaskObject
 
+    elif name == "BlobObject":
+        from flowcept.commons.flowcept_dataclasses.blob_object import BlobObject
+
+        return BlobObject
+
     elif name == "flowcept_task":
         from flowcept.instrumentation.flowcept_task import flowcept_task
 
@@ -86,6 +91,7 @@ __all__ = [
     "Flowcept",
     "flowcept_torch",
     "WorkflowObject",
+    "BlobObject",
     "__version__",
     "SETTINGS_PATH",
 ]

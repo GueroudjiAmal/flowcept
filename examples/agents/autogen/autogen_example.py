@@ -3,34 +3,47 @@ examples/agents/autogen/autogen_example.py
 ==========================================
 
 Counter test mirroring the Academy example:
-  - AssistantAgent increments a counter 5 times (values 1-5)
-  - CriticAgent verifies the running total after each step
-  - After the team run, openai_chat() interprets the final value (15 = 1+2+3+4+5)
+
+  AssistantAgent  : increments a counter 5 times (values 1-5)
+  CriticAgent     : verifies each running total
+  interpret step  : calls openai_chat() inside _run() to interpret the final
+                    value (15 = 1+2+3+4+5), mirroring SummaryAgent.interpret_result()
 
 Run
 ---
     OPENAI_API_KEY=sk-... python examples/agents/autogen/autogen_example.py
+
+Plugin configuration
+--------------------
+Enable the AutoGen plugin in your settings.yaml:
+
+    plugins:
+      autogen:
+        enabled: true
+        kind: autogen
+        workflow_name: "autogen-counter-test"
+        performance_tracking: true
+
+Flowcept will auto-start/stop the plugin — no explicit plugin.start() /
+plugin.stop() calls needed.
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-from typing import AsyncGenerator, Sequence
+from typing import AsyncGenerator
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from flowcept.agents.autogen.autogen_plugin import FlowceptAutoGenPlugin, openai_chat
+from flowcept import Flowcept
+from flowcept.agents.autogen.autogen_plugin import openai_chat, run_team
 
 try:
     from autogen_agentchat.agents import AssistantAgent
     from autogen_agentchat.conditions import MaxMessageTermination
     from autogen_agentchat.teams import RoundRobinGroupChat
-    from autogen_core.models import (
-        ChatCompletionClient, CreateResult, RequestUsage,
-        LLMMessage, AssistantMessage,
-    )
-    from autogen_core import CancellationToken
+    from autogen_core.models import ChatCompletionClient, CreateResult, RequestUsage, ModelInfo
 except ImportError:
     print("ERROR: pip install autogen-agentchat", file=sys.stderr)
     sys.exit(1)
@@ -60,18 +73,14 @@ class _StubModelClient(ChatCompletionClient):
 
     @property
     def model_info(self):
-        from autogen_core.models import ModelInfo
         return ModelInfo(vision=False, function_calling=False, json_output=False,
                          family="stub", structured_output=False)
 
     @property
     def capabilities(self):
-        from autogen_core.models import ModelCapabilities
-        return ModelCapabilities(vision=False, function_calling=False, json_output=False)
+        return ModelInfo(vision=False, function_calling=False, json_output=False)
 
-    async def create(self, messages: Sequence[LLMMessage], *, tools=(),
-                     tool_choice="auto", json_output=None,
-                     extra_create_args=None, cancellation_token=None) -> CreateResult:
+    async def create(self, *_, **__) -> CreateResult:
         global _stub_idx
         content = _STUB_RESPONSES[_stub_idx % len(_STUB_RESPONSES)]
         _stub_idx += 1
@@ -82,9 +91,8 @@ class _StubModelClient(ChatCompletionClient):
             cached=False,
         )
 
-    async def create_stream(self, messages: Sequence[LLMMessage], **kwargs) -> AsyncGenerator:
-        result = await self.create(messages)
-        yield result
+    async def create_stream(self, *_, **__) -> AsyncGenerator:
+        yield await self.create()
 
     def actual_usage(self) -> RequestUsage:
         return RequestUsage(prompt_tokens=0, completion_tokens=0)
@@ -92,10 +100,10 @@ class _StubModelClient(ChatCompletionClient):
     def total_usage(self) -> RequestUsage:
         return RequestUsage(prompt_tokens=0, completion_tokens=0)
 
-    def count_tokens(self, messages, **kwargs) -> int:
+    def count_tokens(self, *_, **__) -> int:
         return 0
 
-    def remaining_tokens(self, messages, **kwargs) -> int:
+    def remaining_tokens(self, *_, **__) -> int:
         return 4096
 
     async def close(self) -> None:
@@ -103,44 +111,58 @@ class _StubModelClient(ChatCompletionClient):
 
 
 # ---------------------------------------------------------------------------
-# Build the AutoGen team
+# Agents and team
 # ---------------------------------------------------------------------------
 
-def build_team(model_client) -> RoundRobinGroupChat:
-    assistant = AssistantAgent(
-        name="assistant",
-        model_client=model_client,
-        system_message=(
-            "You are a counter agent. Increment the counter by the given step "
-            "and report the running total. When all 5 steps are done, end with TERMINATE."
-        ),
-    )
-    critic = AssistantAgent(
-        name="critic",
-        model_client=model_client,
-        system_message=(
-            "You are a verifier. Check each running total and confirm it is correct. "
-            "When TERMINATE is reached, echo it."
-        ),
-    )
+class AssistantCounterAgent(AssistantAgent):
+    """Increments a counter and reports the running total."""
+
+    def __init__(self):
+        super().__init__(
+            name="assistant",
+            model_client=_StubModelClient(),
+            system_message=(
+                "You are a counter agent. Increment the counter by the given step "
+                "and report the running total. When all 5 steps are done, end with TERMINATE."
+            ),
+        )
+
+
+class CriticAgent(AssistantAgent):
+    """Verifies each running total."""
+
+    def __init__(self):
+        super().__init__(
+            name="critic",
+            model_client=_StubModelClient(),
+            system_message=(
+                "You are a verifier. Check each running total and confirm it is correct. "
+                "When TERMINATE is reached, echo it."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Driver — mirrors academy_example._run()
+# ---------------------------------------------------------------------------
+
+async def _run() -> None:
+    assistant = AssistantCounterAgent()
+    critic = CriticAgent()
     termination = MaxMessageTermination(max_messages=len(_STUB_RESPONSES) + 1)
-    return RoundRobinGroupChat(
+    team = RoundRobinGroupChat(
         participants=[assistant, critic],
         termination_condition=termination,
     )
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-async def _run(plugin: FlowceptAutoGenPlugin, team) -> int:
     task = "Increment a counter 5 times with step values 1, 2, 3, 4, 5 and report each running total."
     print(f"\n[example] Task: {task!r}\n", flush=True)
 
-    result = await plugin.run_team(team, task, team_name="counter-team")
+    # run_team() uses _ACTIVE_INTERCEPTOR — no explicit plugin handle needed,
+    # mirroring how openai_chat() / anthropic_chat() work.
+    result = await run_team(team, task, team_name="counter-team")
 
-    # Parse final total from last assistant message
+    # Parse final total — mirrors SummaryAgent.get_result()
     final_value = 0
     for msg in result.messages:
         content = getattr(msg, "content", "")
@@ -160,43 +182,29 @@ async def _run(plugin: FlowceptAutoGenPlugin, team) -> int:
         print(f"\n[{source}]\n{content}")
     print(f"\nStop reason: {result.stop_reason}")
 
-    return final_value
+    # Interpret the result — mirrors SummaryAgent.interpret_result() @action.
+    # openai_chat() fires record_llm_call() automatically.
+    print("\n[example] Calling openai_chat() to interpret the counter result …", flush=True)
+    interpretation = openai_chat(
+        prompt=(
+            f"A counter was incremented 5 times with values 1, 2, 3, 4, 5 "
+            f"and reached a final value of {final_value}. "
+            f"In exactly one sentence, explain what this arithmetic result represents."
+        ),
+        model="gpt-4o-mini",
+        system="You are a concise data analyst.",
+        temperature=0.3,
+        context={"agent": "counter-team", "call_type": "interpret_result"},
+    )
+    print(f"\n[example] LLM says: {interpretation}\n", flush=True)
+    print(f"[example] Counter reached {final_value}  (expected 15 = 1+2+3+4+5)", flush=True)
+    assert final_value == 15, f"Expected 15 but got {final_value}"
+    print("[example] Assertion passed.", flush=True)
 
 
 def main() -> None:
-    model_client = _StubModelClient()
-    team = build_team(model_client)
-
-    plugin = FlowceptAutoGenPlugin(
-        config={
-            "enabled":              True,
-            "workflow_name":        "autogen-counter-test",
-            "performance_tracking": True,
-        }
-    )
-    plugin.start()
-
-    try:
-        final_value = asyncio.run(_run(plugin, team))
-
-        # Mirror academy's interpret_result @action
-        print("\n[example] Calling openai_chat() to interpret the counter result …", flush=True)
-        interpretation = openai_chat(
-            prompt=(
-                f"A counter was incremented 5 times with values 1, 2, 3, 4, 5 "
-                f"and reached a final value of {final_value}. "
-                f"In exactly one sentence, explain what this arithmetic result represents."
-            ),
-            model="gpt-4o-mini",
-            system="You are a concise data analyst.",
-            temperature=0.3,
-            context={"agent": "post_team_analysis", "call_type": "interpret_result"},
-        )
-        print(f"\n[example] LLM says: {interpretation}\n", flush=True)
-        print(f"[example] Counter reached {final_value}  (expected 15 = 1+2+3+4+5)", flush=True)
-
-    finally:
-        plugin.stop()
+    with Flowcept():
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":

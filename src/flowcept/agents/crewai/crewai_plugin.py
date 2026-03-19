@@ -617,7 +617,7 @@ class _FlowceptCrewAIHooks:
 # ---------------------------------------------------------------------------
 
 class _CrewAIInterceptor:
-    """Standalone interceptor for when there's no Academy plugin to share."""
+    """Standalone interceptor for CrewAI provenance (Dask-style)."""
 
     def __init__(self) -> None:
         self._interceptor = None
@@ -977,6 +977,130 @@ def anthropic_chat(
         "context": context or {},
     })
     return text
+
+
+# ---------------------------------------------------------------------------
+# FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
+# capture full provenance for every messages.create / messages.stream call.
+# ---------------------------------------------------------------------------
+
+class FlowceptAnthropicClient:
+    """
+    Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
+    every ``messages.create`` / ``messages.stream`` call as a FlowCept
+    provenance record (subtype=llm_call) via ``record_llm_call()``.
+
+    Usage::
+
+        import anthropic
+        from flowcept.agents.crewai.crewai_plugin import FlowceptAnthropicClient
+
+        client = FlowceptAnthropicClient(anthropic.Anthropic(), agent_name="my-agent")
+        response = client.messages.create(
+            model="claude-3-5-haiku-latest",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+    """
+
+    def __init__(self, client, agent_name=None, context=None):
+        self._inner = client
+        self._agent_name = agent_name
+        self._context: dict = context or {}
+        self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+class _FlowceptAnthropicMessages:
+    def __init__(self, messages_resource, agent_name, context):
+        self._inner = messages_resource
+        self._agent_name = agent_name
+        self._context = context
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def create(self, **kwargs):
+        import time as _time
+        t0 = _time.time()
+        result = self._inner.create(**kwargs)
+        self._record(kwargs, result, _time.time() - t0)
+        return result
+
+    async def async_create(self, **kwargs):
+        import time as _time
+        t0 = _time.time()
+        result = await self._inner.create(**kwargs)
+        self._record(kwargs, result, _time.time() - t0)
+        return result
+
+    def stream(self, **kwargs):
+        import time as _time
+        return _FlowceptAnthropicStream(self._inner.stream(**kwargs), kwargs, self._record, _time.time())
+
+    def _record(self, kwargs, result, elapsed):
+        try:
+            model = kwargs.get("model", "unknown")
+            text = ""
+            thinking_text = ""
+            tool_uses = []
+            for block in getattr(result, "content", []):
+                btype = getattr(block, "type", None)
+                if btype == "text":
+                    text += getattr(block, "text", "")
+                elif btype == "thinking":
+                    thinking_text += getattr(block, "thinking", "")
+                elif btype == "tool_use":
+                    tool_uses.append({"id": getattr(block, "id", None), "name": getattr(block, "name", None), "input": getattr(block, "input", None)})
+            usage = getattr(result, "usage", None)
+            usage_dict = {attr: getattr(usage, attr, None) for attr in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")} if usage else {}
+            ctx = dict(self._context)
+            if self._agent_name:
+                ctx["agent_name"] = self._agent_name
+            payload = {
+                "type": "chat_completion", "model": model, "model_used": getattr(result, "model", model),
+                "messages": kwargs.get("messages"), "system_prompt": kwargs.get("system"),
+                "max_tokens": kwargs.get("max_tokens"), "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"), "top_k": kwargs.get("top_k"),
+                "stop_sequences": kwargs.get("stop_sequences"),
+                "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
+                "tools_provided": [t.get("name") for t in (kwargs.get("tools") or [])],
+                "tool_choice": kwargs.get("tool_choice"),
+                "text": text, "thinking_text": thinking_text or None,
+                "finish_reason": getattr(result, "stop_reason", None),
+                "stop_sequence": getattr(result, "stop_sequence", None),
+                "tool_uses": tool_uses or None, "response_id": getattr(result, "id", None),
+                "usage": usage_dict, "elapsed_s": elapsed, "context": ctx,
+            }
+            record_llm_call({k: v for k, v in payload.items() if v is not None})
+        except Exception:
+            pass
+
+
+class _FlowceptAnthropicStream:
+    def __init__(self, ctx_mgr, kwargs, record_fn, t0):
+        self._ctx_mgr = ctx_mgr
+        self._kwargs = kwargs
+        self._record_fn = record_fn
+        self._t0 = t0
+        self._stream = None
+
+    def __enter__(self):
+        self._stream = self._ctx_mgr.__enter__()
+        return self._stream
+
+    def __exit__(self, *args):
+        import time as _time
+        result = None
+        try:
+            result = self._stream.get_final_message()
+        except Exception:
+            pass
+        if result is not None:
+            self._record_fn(self._kwargs, result, _time.time() - self._t0)
+        return self._ctx_mgr.__exit__(*args)
 
 
 # ---------------------------------------------------------------------------

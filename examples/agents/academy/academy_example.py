@@ -13,6 +13,22 @@ SummaryAgent   : increments the counter 5 times (1+2+3+4+5 = 15), then calls
 Run
 ---
     OPENAI_API_KEY=sk-... python examples/agents/academy/academy_example.py
+
+Plugin configuration
+--------------------
+The FlowceptAcademyPlugin can be activated without any code changes by enabling
+it in your settings.yaml:
+
+    plugins:
+      academy:
+        enabled: true
+        kind: academy
+        workflow_name: "academy-counter-example"
+        performance_tracking: true
+
+When enabled this way, Flowcept.start() / .stop() (or the context manager)
+will automatically start and stop the plugin — no explicit plugin.start() /
+plugin.stop() calls needed in your code.
 """
 from __future__ import annotations
 
@@ -28,7 +44,7 @@ from academy.exchange import LocalExchangeFactory
 from academy.logging import init_logging
 from academy.manager import Manager
 
-from flowcept.agents.academy.academy_plugin import FlowceptAcademyPlugin, openai_chat
+from flowcept.agents.academy.academy_plugin import openai_chat
 
 
 # ---------------------------------------------------------------------------
@@ -169,18 +185,13 @@ async def _run() -> None:
 def main() -> None:
     init_logging("INFO")
 
-    plugin = FlowceptAcademyPlugin(
-        config={
-            "enabled":              True,
-            "workflow_name":        "academy-counter-example",
-            "performance_tracking": True,
-        },
-    )
-    plugin.start()
-    try:
+    # The academy plugin is configured in settings.yaml under plugins.academy.
+    # Flowcept reads that config and auto-starts/stops the plugin — no explicit
+    # plugin.start() / plugin.stop() calls needed here.
+    from flowcept import Flowcept
+
+    with Flowcept():
         asyncio.run(_run())
-    finally:
-        plugin.stop()
 
 
 if __name__ == "__main__":

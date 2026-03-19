@@ -32,7 +32,7 @@ Flowcept captures and queries workflow provenance at runtime with minimal code c
 
 <h4 align="center">
   <a href="https://flowcept.org">Website</a> &#8226;
-  <a href="https://flowcept.readthedocs.io/">Documentation</a> &#8226; 
+  <a href="https://flowcept.readthedocs.io/">Documentation</a> &#8226;
   <a href="./docs/publications">Publications</a>
 </h4>
 
@@ -148,6 +148,7 @@ For an end-to-end workflow developer tutorial (default user guide), start with [
 - [Setup and the Settings File](#setup)
 - [Running with Containers](#running-with-containers)
 - [Examples](#examples)
+- [Agentic Provenance Plugins](#agentic-provenance-plugins)
 - [Data Persistence](#data-persistence)
 - [Performance Tuning](#performance-tuning-for-performance-evaluation)
 - [AMD GPU Setup](#install-amd-gpu-lib)
@@ -167,10 +168,11 @@ Designed for scenarios involving critical data from multiple, federated workflow
 - Optional explicit instrumentation via decorators
 - ML-aware capture, from workflow to epoch and layer granularity
 - Agentic workflows: MCP agents-aware provenance capture
+- **Agentic provenance plugins** for Academy, LangGraph, CrewAI, and AutoGen — intra- and inter-agent provenance, LLM call capture, zero code changes required
 - Low overhead, suitable for HPC and highly distributed setups
 - Telemetry capture for CPU, GPU, memory, linked to dataflow
 - Pluggable MQ and storage backends (Redis, Kafka, MongoDB, LMDB)
-- [W3C PROV](https://www.w3.org/TR/prov-overview/) adherence 
+- [W3C PROV](https://www.w3.org/TR/prov-overview/) adherence
 
 Explore [Jupyter Notebooks](notebooks) and [Examples](examples) for usage.
 
@@ -189,7 +191,7 @@ This installs the minimal Flowcept package, **not** including MongoDB, Redis, MC
 
 ### 2. Installing Specific Adapters and Additional Dependencies
 
-Flowcept integrates with several tools and services, but you should **only install what you actually need**.  
+Flowcept integrates with several tools and services, but you should **only install what you actually need**.
 Good practice is to cherry-pick the extras relevant to your workflow instead of installing them all.
 
 ```shell
@@ -214,12 +216,12 @@ pip install flowcept[dev]           # Developer dependencies (docs, tests, lint,
 pip install flowcept[extras]
 ```
 
-The `extras` group is a convenience shortcut that bundles the most common runtime dependencies.  
+The `extras` group is a convenience shortcut that bundles the most common runtime dependencies.
 It is intended for users who want a fairly complete, but not maximal, Flowcept environment.
 
 You might choose `flowcept[extras]` if:
 
-- You want Flowcept to run out-of-the-box with Redis, telemetry, and MongoDB.  
+- You want Flowcept to run out-of-the-box with Redis, telemetry, and MongoDB.
 - You prefer not to install each extra one by one
 
 ⚠️ If you only need one of these features, install it individually instead of `extras`.
@@ -256,45 +258,45 @@ The [Quickstart](#quickstart) example works with just `pip install flowcept`, no
 
 For online queries or distributed capture, Flowcept relies on two optional components:
 
-- **Message Queue (MQ)** — message broker / pub-sub / data stream  
-- **Database (DB)** — persistent storage for historical queries  
+- **Message Queue (MQ)** — message broker / pub-sub / data stream
+- **Database (DB)** — persistent storage for historical queries
 
 ---
 
 #### Message Queue (MQ)
 
-- Required for anything beyond Quickstart  
-- Flowcept publishes provenance data to the MQ during workflow runs  
-- Developers can subscribe with custom consumers (see [this example](examples/consumers/simple_consumer.py).  
-- You can monitor or print messages in motion using `flowcept --stream-messages --print`.  
+- Required for anything beyond Quickstart
+- Flowcept publishes provenance data to the MQ during workflow runs
+- Developers can subscribe with custom consumers (see [this example](examples/consumers/simple_consumer.py).
+- You can monitor or print messages in motion using `flowcept --stream-messages --print`.
 
 Supported MQs:
-- [Redis](https://redis.io) → **default**, lightweight, works on Linux, macOS, Windows, and HPC (tested on [Frontier](link) and [Summit](link))  
-- [Kafka](https://kafka.apache.org) → for distributed environments or if Kafka is already in your stack  
-- [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs  
+- [Redis](https://redis.io) → **default**, lightweight, works on Linux, macOS, Windows, and HPC (tested on [Frontier](link) and [Summit](link))
+- [Kafka](https://kafka.apache.org) → for distributed environments or if Kafka is already in your stack
+- [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs
 
 ---
 
 #### Database (DB)
 
 - **Optional**, but required for:
-  - Persisting provenance beyond MQ memory/disk buffers  
-  - Running complex analytical queries on historical data  
+  - Persisting provenance beyond MQ memory/disk buffers
+  - Running complex analytical queries on historical data
 
 Supported DBs:
-- [MongoDB](https://www.mongodb.com) → default, efficient bulk writes + rich query support  
-- [LMDB](https://lmdb.readthedocs.io) → lightweight, no external service, basic query capabilities  
+- [MongoDB](https://www.mongodb.com) → default, efficient bulk writes + rich query support
+- [LMDB](https://lmdb.readthedocs.io) → lightweight, no external service, basic query capabilities
 
 ---
 
 ### Notes
 
 - Without a DB:
-  - Provenance remains in the MQ only (persistence not guaranteed)  
-  - Complex historical queries are unavailable  
-- Flowcept’s architecture is modular: other MQs and DBs (graph, relational, etc.) can be added in the future  
-- Deployment examples for MQ and DB are provided in the [deployment](deployment) directory  
- 
+  - Provenance remains in the MQ only (persistence not guaranteed)
+  - Complex historical queries are unavailable
+- Flowcept’s architecture is modular: other MQs and DBs (graph, relational, etc.) can be added in the future
+- Deployment examples for MQ and DB are provided in the [deployment](deployment) directory
+
 
 ### Downloading and Starting External Services (MQ or DB)
 
@@ -323,15 +325,15 @@ See the [deployment/](deployment/) compose files for expected images and configu
 
 #### Running on the Host (no containers)
 
-1. Install binaries for the service you need:  
-   - **macOS** users can install with [Homebrew](https://brew.sh).  
+1. Install binaries for the service you need:
+   - **macOS** users can install with [Homebrew](https://brew.sh).
      Example for Redis:
      ```bash
      brew install redis
      brew services start redis
      ```
 
-   - On Linux, use your distro package manager (e.g. `apt`, `dnf`, `yum`) 
+   - On Linux, use your distro package manager (e.g. `apt`, `dnf`, `yum`)
    - If non-root (typically the case if you want to deploy these services locally in an HPC system), search for the installed binaries for your OS/hardware architecture, download them in a directory that you have r+w permission, and run them.
    - On Windows, utilize [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) to use a Linux distro.
 
@@ -349,14 +351,14 @@ Flowcept uses a settings file for configuration.
 
 #### What You Can Configure
 
-- Message queue and database routes, ports, and paths  
-- MCP agent ports and LLM API keys  
-- Buffer sizes and flush settings  
-- Telemetry capture settings  
-- Instrumentation and PyTorch details  
-- Log levels  
-- Data observability adapters  
-- And more (see [example file](resources/sample_settings.yaml))  
+- Message queue and database routes, ports, and paths
+- MCP agent ports and LLM API keys
+- Buffer sizes and flush settings
+- Telemetry capture settings
+- Instrumentation and PyTorch details
+- Log levels
+- Data observability adapters
+- And more (see [example file](resources/sample_settings.yaml))
 
 ---
 
@@ -364,8 +366,8 @@ Flowcept uses a settings file for configuration.
 
 Flowcept looks for its settings in the following order:
 
-1. `~/.flowcept/settings.yaml` — created by running `flowcept --init-settings`  
-2. Environment variable `FLOWCEPT_SETTINGS_PATH` — if set, Flowcept will use this environment variable  
+1. `~/.flowcept/settings.yaml` — created by running `flowcept --init-settings`
+2. Environment variable `FLOWCEPT_SETTINGS_PATH` — if set, Flowcept will use this environment variable
 3. [Default sample file](resources/sample_settings.yaml) — used if neither of the above is found
 
 # Examples
@@ -373,6 +375,91 @@ Flowcept looks for its settings in the following order:
 ### Adapters and Notebooks
 
  See the [Jupyter Notebooks](notebooks) and [Examples directory](examples) for utilization examples.
+
+## Agentic Provenance Plugins
+
+Flowcept ships with zero-code-change provenance plugins for four popular agentic frameworks: **Academy**, **LangGraph**, **CrewAI**, and **AutoGen**. Each plugin automatically captures:
+
+- **Intra-agent provenance** — individual action/task executions with inputs, outputs, timing, and status
+- **Inter-agent provenance** — parent/child relationships between agents and the tasks they spawn
+- **LLM call provenance** — every OpenAI or Anthropic API call linked back to the agent action that triggered it (model, prompt, tokens, latency)
+
+### Enabling plugins via `settings.yaml`
+
+Add a `plugins:` block to your `~/.flowcept/settings.yaml`. Only the frameworks you want to track need to be listed:
+
+```yaml
+plugins:
+  academy:
+    enabled: true
+    kind: academy
+    workflow_name: "my-academy-workflow"
+    performance_tracking: true
+  langgraph:
+    enabled: true
+    kind: langgraph
+    workflow_name: "my-langgraph-workflow"
+    performance_tracking: true
+  crewai:
+    enabled: true
+    kind: crewai
+    workflow_name: "my-crewai-workflow"
+    performance_tracking: true
+  autogen:
+    enabled: true
+    kind: autogen
+    workflow_name: "my-autogen-workflow"
+    performance_tracking: true
+```
+
+Then wrap your code with `Flowcept()` — all enabled plugins start and stop automatically:
+
+```python
+from flowcept import Flowcept
+
+with Flowcept():
+    # your Academy / LangGraph / CrewAI / AutoGen code here
+    ...
+```
+
+### Helper utilities
+
+Each plugin exposes drop-in wrappers to record LLM calls regardless of which framework is active:
+
+| Function / Class | Purpose |
+|---|---|
+| `openai_chat(prompt, model, ...)` | Call OpenAI and automatically record the call with provenance linkage |
+| `anthropic_chat(prompt, model, ...)` | Same for Anthropic Claude models |
+| `FlowceptAnthropicClient(client)` | Wrap an existing `anthropic.Anthropic` client to intercept all `messages.create` / `stream` calls |
+| `run_team(team, task, ...)` | *(AutoGen only)* Run an autogen team and capture full provenance without an explicit plugin handle |
+
+All four plugins export `openai_chat` and `anthropic_chat` from their respective modules (e.g. `from flowcept.agents.academy.academy_plugin import openai_chat`).
+
+### What gets captured
+
+| Captured field | Academy | LangGraph | CrewAI | AutoGen |
+|---|:---:|:---:|:---:|:---:|
+| Agent action / node executions | ✓ | ✓ | ✓ | ✓ |
+| Inputs and outputs per action | ✓ | ✓ | ✓ | ✓ |
+| Timing (start / end / latency) | ✓ | ✓ | ✓ | ✓ |
+| Parent–child task linkage | ✓ | ✓ | ✓ | ✓ |
+| LLM calls (OpenAI) | ✓ | ✓ | ✓ | ✓ |
+| LLM calls (Anthropic) | ✓ | ✓ | ✓ | ✓ |
+| Token usage | ✓ | ✓ | ✓ | ✓ |
+| Agent ID on LLM calls | ✓ | ✓ | ✓ | ✓ |
+| Automatic agent wrapping | ✓ | ✓ | — | ✓ |
+
+### Examples
+
+Runnable examples for each framework are in [`examples/agents/`](examples/agents/):
+
+- [`examples/agents/academy/academy_example.py`](examples/agents/academy/academy_example.py)
+- [`examples/agents/langgraph/langgraph_example.py`](examples/agents/langgraph/langgraph_example.py)
+- [`examples/agents/crewai/crewai_example.py`](examples/agents/crewai/crewai_example.py)
+- [`examples/agents/autogen/autogen_example.py`](examples/agents/autogen/autogen_example.py)
+- [`examples/agents/combined_agentic_systems/combined_example.py`](examples/agents/combined_agentic_systems/combined_example.py) — all four frameworks running concurrently
+
+---
 
 # Summary: Observability, Instrumentation, MQs, DBs, and Querying
 
@@ -384,22 +471,23 @@ Flowcept looks for its settings in the following order:
 | **Custom Task Creation**           | `FlowceptTask(activity_id=<id>, used=<inputs>, generated=<outputs>, ...)` <br/><br/>Use for fully customizable task instrumentation. Publishes directly to the MQ either via context management (`with FlowceptTask(...)`) or by calling `send()`. It needs to have a `Flowcept().start()` first (or within a `with Flowcept()` context). See [example](examples/consumers/ping_pong_example.py).                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Message Queues (MQ)**            | - **Disabled** (offline mode: provenance events stay in an in-memory buffer, not accessible to external processes) <br> - [Redis](https://redis.io) → default, lightweight, easy to run anywhere <br> - [Kafka](https://kafka.apache.org) → for distributed, production setups <br> - [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs <br><br> _Setup example:_ [docker compose](https://github.com/ORNL/flowcept/blob/main/deployment/compose.yml)                                                                                                                                                                                                                                                                                                                                                      |
 | **Databases**                      | - **Disabled** → Flowcept runs in ephemeral mode (data only in MQ, no persistence) <br> - **[MongoDB](https://www.mongodb.com)** → default, rich queries and efficient bulk writes <br> - **[LMDB](https://lmdb.readthedocs.io)** → lightweight, file-based, no external service, basic query support                                                                                                                                                                                                                                                                                                                                                     |
-| **Querying and Monitoring**        | - **[Grafana](deployment/compose-grafana.yml)** → dashboarding via MongoDB connector <br> - **MCP Flowcept Agent** → LLM-based querying of provenance data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | 
+| **Querying and Monitoring**        | - **[Grafana](deployment/compose-grafana.yml)** → dashboarding via MongoDB connector <br> - **MCP Flowcept Agent** → LLM-based querying of provenance data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Agentic Provenance Plugins**     | [Academy](examples/agents/academy/academy_example.py), [LangGraph](examples/agents/langgraph/langgraph_example.py), [CrewAI](examples/agents/crewai/crewai_example.py), [AutoGen](examples/agents/autogen/autogen_example.py) — zero-code-change intra/inter-agent + LLM call provenance. Enable via `plugins:` in `settings.yaml`, wrap with `with Flowcept():`. See [combined example](examples/agents/combined_agentic_systems/combined_example.py). |
 | **Custom Consumer**                | You can implement your own consumer to monitor or query the provenance stream in real time. Useful for custom analytics, monitoring, debugging, or to persist the data in a different data model (e.g., graph) . See [example](examples/consumers/simple_consumer.py).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 
 ## Performance Tuning for Performance Evaluation
 
-In the settings.yaml file, many variables may impact interception efficiency. 
+In the settings.yaml file, many variables may impact interception efficiency.
 Please be mindful of the following parameters:
 
 * `mq`
     - `buffer_size` and `insertion_buffer_time_secs`. -- `buffer_size: 1` is really bad for performance, but it will give the most up-to-date info possible to the MQ.
-    
+
 * `log`
     - set both stream and files to disable
 
-* `telemetry_capture` 
+* `telemetry_capture`
   The more things you enable, the more overhead you'll get. For GPU, you can turn on/off specific metrics.
 
 * `instrumentation`
@@ -457,7 +545,7 @@ R. Souza, T. Skluzacek, S. Wilkinson, M. Ziatdinov, and R. da Silva
 **Bibtex:**
 
 ```latex
-@inproceedings{souza2023towards,  
+@inproceedings{souza2023towards,
   author = {Souza, Renan and Skluzacek, Tyler J and Wilkinson, Sean R and Ziatdinov, Maxim and da Silva, Rafael Ferreira},
   booktitle = {IEEE International Conference on e-Science},
   doi = {10.1109/e-Science58273.2023.10254822},

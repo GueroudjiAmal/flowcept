@@ -12,6 +12,21 @@ The final node calls openai_chat() to interpret the result (15 = 1+2+3+4+5).
 Run
 ---
     OPENAI_API_KEY=sk-... python examples/agents/langgraph/langgraph_example.py
+
+Plugin configuration
+--------------------
+Enable the LangGraph plugin in your settings.yaml:
+
+    plugins:
+      langgraph:
+        enabled: true
+        kind: langgraph
+        workflow_name: "langgraph-counter-test"
+        performance_tracking: true
+
+Flowcept will auto-start/stop the plugin — no explicit plugin.start() /
+plugin.stop() calls needed.  Access the running plugin via
+flowcept.plugins["langgraph"] to retrieve the callback_handler.
 """
 from __future__ import annotations
 
@@ -21,7 +36,8 @@ from typing import TypedDict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from flowcept.agents.langgraph.langgraph_plugin import FlowceptLangGraphPlugin, openai_chat
+from flowcept import Flowcept
+from flowcept.agents.langgraph.langgraph_plugin import openai_chat
 
 try:
     from langgraph.graph import StateGraph, END
@@ -105,15 +121,6 @@ def build_graph():
 def main():
     graph = build_graph()
 
-    plugin = FlowceptLangGraphPlugin(
-        config={
-            "enabled":              True,
-            "workflow_name":        "langgraph-counter-test",
-            "performance_tracking": True,
-        }
-    )
-    plugin.start()
-
     print("\n[example] Running counter graph …\n", flush=True)
 
     initial_state: CounterState = {
@@ -122,12 +129,16 @@ def main():
         "interpretation": "",
     }
 
-    final_state = graph.invoke(
-        initial_state,
-        config={"callbacks": [plugin.callback_handler]},
-    )
-
-    plugin.stop()
+    with Flowcept() as flowcept:
+        plugin = flowcept.plugins.get("langgraph")
+        if plugin is None:
+            raise RuntimeError(
+                "LangGraph plugin is not enabled. Set 'plugins.langgraph.enabled: true' in settings.yaml."
+            )
+        final_state = graph.invoke(
+            initial_state,
+            config={"callbacks": [plugin.callback_handler]},
+        )
 
     print("\n" + "=" * 60)
     print("GRAPH OUTPUT")

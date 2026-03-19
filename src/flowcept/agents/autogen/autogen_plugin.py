@@ -49,6 +49,7 @@ from __future__ import annotations
 import os
 
 import asyncio
+import contextvars
 import time
 import uuid
 import threading
@@ -56,6 +57,18 @@ import logging
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+# ContextVar: holds the task_id of the currently-executing AutoGen message (or
+# run). record_llm_call() reads this to set parent_task_id on LLM call records.
+_current_autogen_task_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_current_autogen_task_id", default=None
+)
+
+# ContextVar: holds the agent name (source) currently being processed, so that
+# record_llm_call() can tag LLM records with the agent that made the call.
+_current_autogen_agent_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_current_autogen_agent_id", default=None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +151,7 @@ class _ProvenanceStats:
 # ---------------------------------------------------------------------------
 
 class _AutoGenInterceptor:
-    """Standalone FlowCept interceptor for use without an Academy plugin."""
+    """Standalone FlowCept interceptor for AutoGen provenance (Dask-style)."""
 
     def __init__(self) -> None:
         self._interceptor = None
@@ -237,6 +250,69 @@ def _safe_clip(obj: Any, depth: int = 0) -> Any:
     return repr(obj)
 
 
+# ---------------------------------------------------------------------------
+# Automatic LLM patching — mirrors academy's _install_runtime_patches()
+# ---------------------------------------------------------------------------
+
+_orig_assistant_init = None
+_patches_installed = False
+
+
+def _install_autogen_patches() -> None:
+    """Patch AssistantAgent.__init__ to auto-wrap _model_client with FlowceptModelClient."""
+    global _orig_assistant_init, _patches_installed
+    if _patches_installed:
+        return
+    try:
+        from autogen_agentchat.agents import AssistantAgent
+        _orig_assistant_init = AssistantAgent.__init__
+
+        def _patched_init(self_agent, *args, **kwargs):
+            _orig_assistant_init(self_agent, *args, **kwargs)
+            mc = getattr(self_agent, "_model_client", None)
+            if mc is not None and not isinstance(mc, FlowceptModelClient):
+                self_agent._model_client = FlowceptModelClient(
+                    mc, agent_name=getattr(self_agent, "name", None)
+                )
+
+        AssistantAgent.__init__ = _patched_init
+        _patches_installed = True
+    except (ImportError, AttributeError):
+        pass
+
+
+def _uninstall_autogen_patches() -> None:
+    """Restore original AssistantAgent.__init__."""
+    global _orig_assistant_init, _patches_installed
+    if not _patches_installed:
+        return
+    try:
+        from autogen_agentchat.agents import AssistantAgent
+        AssistantAgent.__init__ = _orig_assistant_init
+        _orig_assistant_init = None
+        _patches_installed = False
+    except (ImportError, AttributeError):
+        pass
+
+
+def _ensure_agents_wrapped(team: Any) -> None:
+    """Walk all participants of a team and wrap their _model_client if not already wrapped.
+
+    Handles agents created before the plugin was started.
+    """
+    participants = (
+        getattr(team, "_participants", None)
+        or getattr(team, "agents", None)
+        or []
+    )
+    for agent in participants:
+        mc = getattr(agent, "_model_client", None)
+        if mc is not None and not isinstance(mc, FlowceptModelClient):
+            agent._model_client = FlowceptModelClient(
+                mc, agent_name=getattr(agent, "name", None)
+            )
+
+
 async def _run_with_provenance(
     team: Any,
     task: str,
@@ -255,6 +331,9 @@ async def _run_with_provenance(
     from autogen_agentchat.messages import BaseChatMessage, BaseAgentEvent
     from autogen_core import CancellationToken
 
+    # Wrap any pre-existing agents' model clients (created before plugin start)
+    _ensure_agents_wrapped(team)
+
     group_id    = str(uuid.uuid4())
     run_task_id = str(uuid.uuid4())
     run_start   = time.time()
@@ -268,6 +347,10 @@ async def _run_with_provenance(
 
     messages_captured: list[dict] = []
     final_result: Any = None
+
+    # Set contextvar to run_task_id so record_llm_call() links LLM calls to this run
+    _token_task = _current_autogen_task_id.set(run_task_id)
+    _token_agent = _current_autogen_agent_id.set(team_name)
 
     t_stream_start = time.perf_counter()
 
@@ -283,6 +366,10 @@ async def _run_with_provenance(
                 source      = getattr(item, "source", None) or "unknown"
                 content     = getattr(item, "content", None)
                 msg_type    = type(item).__name__
+
+                # Update contextvar so LLM calls within this message are children of it
+                _current_autogen_task_id.set(msg_task_id)
+                _current_autogen_agent_id.set(source)
 
                 # Serialize content
                 if isinstance(content, str):
@@ -331,7 +418,12 @@ async def _run_with_provenance(
             "custom_metadata": custom_meta,
         }
         interceptor.intercept_task(run_task)
+        _current_autogen_task_id.reset(_token_task)
+        _current_autogen_agent_id.reset(_token_agent)
         raise
+
+    _current_autogen_task_id.reset(_token_task)
+    _current_autogen_agent_id.reset(_token_agent)
 
     if stats is not None:
         stats.record("stream_total", time.perf_counter() - t_stream_start)
@@ -368,6 +460,63 @@ async def _run_with_provenance(
 # ---------------------------------------------------------------------------
 
 _ACTIVE_INTERCEPTOR = None
+
+
+async def run_team(
+    team: Any,
+    task: str,
+    team_name: str | None = None,
+    source_agent_id: str | None = None,
+) -> Any:
+    """
+    Run an AutoGen team and automatically capture provenance if the plugin is active.
+
+    This is the module-level equivalent of ``plugin.run_team()`` — it uses the
+    active interceptor set by ``FlowceptAutoGenPlugin.start()``, so no explicit
+    plugin handle is needed.  Mirrors the pattern of ``openai_chat()`` and
+    ``anthropic_chat()`` which also use ``_ACTIVE_INTERCEPTOR`` directly.
+
+    If the plugin is not active, the team runs normally without any provenance
+    overhead.
+
+    Parameters
+    ----------
+    team : RoundRobinGroupChat | SelectorGroupChat | any team with run_stream
+        The AutoGen team to run.
+    task : str
+        The task / initial message to send to the team.
+    team_name : str, optional
+        Human-readable name for this run in provenance records.
+    source_agent_id : str, optional
+        ID of an upstream agent for cross-framework linkage.
+
+    Returns
+    -------
+    TaskResult
+        The final result returned by AutoGen.
+    """
+    interceptor = _ACTIVE_INTERCEPTOR
+    name = team_name or getattr(team, "name", None) or "autogen_team"
+    if interceptor is None:
+        # Plugin not active — run without provenance
+        from autogen_agentchat.base import TaskResult
+        from autogen_core import CancellationToken
+        final = None
+        async for item in team.run_stream(task=task, cancellation_token=CancellationToken()):
+            if isinstance(item, TaskResult):
+                final = item
+        return final
+
+    # Wrap pre-existing agents created before the plugin started
+    _ensure_agents_wrapped(team)
+    return await _run_with_provenance(
+        team=team,
+        task=task,
+        interceptor=interceptor,
+        stats=None,
+        team_name=name,
+        source_agent_id=source_agent_id,
+    )
 
 
 def record_llm_call(payload: dict) -> None:
@@ -412,6 +561,13 @@ def record_llm_call(payload: dict) -> None:
     if "error" in payload:
         generated["error"] = str(payload["error"])
 
+    # Propagate agent linkage from contextvars (set by _run_with_provenance)
+    parent_task_id = _current_autogen_task_id.get(None)
+    agent_id = (
+        payload.get("context", {}).get("agent_name")
+        or _current_autogen_agent_id.get(None)
+    )
+
     task: dict = {
         "task_id":      str(_uuid.uuid4()),
         "subtype":      "llm_call",
@@ -427,7 +583,326 @@ def record_llm_call(payload: dict) -> None:
             "context":   payload.get("context", {}),
         },
     }
+    if parent_task_id:
+        task["parent_task_id"] = parent_task_id
+    if agent_id:
+        task["custom_metadata"]["agent_id"] = agent_id
     interceptor.intercept_task(task)
+
+
+# ---------------------------------------------------------------------------
+# FlowceptModelClient — wraps any AutoGen ChatCompletionClient to capture
+# full LLM call details (model, temperature, reasoning, usage, response, …)
+# ---------------------------------------------------------------------------
+
+class FlowceptModelClient:
+    """
+    Wraps any AutoGen ``ChatCompletionClient`` and records every LLM call as a
+    FlowCept provenance record (subtype=llm_call) via ``record_llm_call()``.
+
+    Usage::
+
+        from autogen_ext.models.openai import OpenAIChatCompletionClient
+        from flowcept.agents.autogen.autogen_plugin import FlowceptModelClient
+
+        real_client = OpenAIChatCompletionClient(model="gpt-4o-mini")
+        wrapped     = FlowceptModelClient(real_client, agent_name="my-agent")
+
+        agent = AssistantAgent(name="my-agent", model_client=wrapped)
+
+    Every call to ``create()`` / ``create_stream()`` will be captured with:
+      - model, temperature, reasoning_effort, top_p, max_tokens
+      - prompt messages, system prompt
+      - response text, finish reason, tool calls
+      - prompt/completion/total token usage
+      - elapsed wall-clock time
+    """
+
+    def __init__(self, client: Any, agent_name: str | None = None, context: dict | None = None):
+        self._inner = client
+        self._agent_name = agent_name
+        self._context: dict = context or {}
+
+    # ---- forward everything to the inner client ----
+
+    @property
+    def model_info(self):
+        return self._inner.model_info
+
+    def actual_usage(self):
+        return self._inner.actual_usage()
+
+    def total_usage(self):
+        return self._inner.total_usage()
+
+    def count_tokens(self, *args, **kwargs):
+        return self._inner.count_tokens(*args, **kwargs)
+
+    def remaining_tokens(self, *args, **kwargs):
+        return self._inner.remaining_tokens(*args, **kwargs)
+
+    async def close(self):
+        return await self._inner.close()
+
+    # ---- instrumented create ----
+
+    async def create(self, messages, **kwargs) -> Any:
+        import time as _time
+
+        t0 = _time.time()
+        result = await self._inner.create(messages, **kwargs)
+        elapsed = _time.time() - t0
+
+        self._record(messages, result, elapsed, kwargs)
+        return result
+
+    async def create_stream(self, messages, **kwargs):
+        import time as _time
+
+        t0 = _time.time()
+        final = None
+        async for chunk in self._inner.create_stream(messages, **kwargs):
+            yield chunk
+            final = chunk
+        elapsed = _time.time() - t0
+
+        if final is not None:
+            self._record(messages, final, elapsed, kwargs)
+
+    def _record(self, messages: Any, result: Any, elapsed: float, kwargs: dict) -> None:
+        """Build a payload and call record_llm_call()."""
+        try:
+            # Extract model name: try direct attr first, then model_info.family fallback
+            mi = getattr(self._inner, "model_info", {}) or {}
+            model = (
+                self._context.get("model_name")
+                or getattr(self._inner, "model", None)
+                or getattr(self._inner, "_model_name", None)
+                or getattr(mi, "model", None)
+                or (mi.get("family") if hasattr(mi, "get") else None)
+                or "unknown"
+            )
+
+            # Extract usage
+            usage_obj = getattr(result, "usage", None)
+            usage: dict = {}
+            if usage_obj is not None:
+                usage["prompt_tokens"]     = getattr(usage_obj, "prompt_tokens", 0)
+                usage["completion_tokens"] = getattr(usage_obj, "completion_tokens", 0)
+                usage["total_tokens"] = (
+                    usage["prompt_tokens"] + usage["completion_tokens"]
+                )
+
+            # Extract content
+            content = getattr(result, "content", "")
+            if not isinstance(content, str):
+                content = str(content)
+
+            # Extract messages list for provenance (truncated)
+            msgs_clip = []
+            for m in (messages or []):
+                if hasattr(m, "model_dump"):
+                    msgs_clip.append(m.model_dump())
+                elif hasattr(m, "__dict__"):
+                    msgs_clip.append(vars(m))
+                else:
+                    msgs_clip.append(str(m))
+
+            ctx = dict(self._context)
+            if self._agent_name:
+                ctx["agent_name"] = self._agent_name
+            ctx["framework"] = "autogen"
+
+            record_llm_call({
+                "type":          "chat_completion",
+                "model":         model,
+                "messages":      msgs_clip,
+                "temperature":   kwargs.get("temperature"),
+                "top_p":         kwargs.get("top_p"),
+                "max_tokens":    kwargs.get("max_tokens"),
+                "reasoning_effort": kwargs.get("reasoning_effort"),
+                "text":          content,
+                "finish_reason": getattr(result, "finish_reason", None),
+                "usage":         usage,
+                "elapsed_s":     elapsed,
+                "context":       ctx,
+            })
+        except Exception:
+            pass  # never break the agent run due to provenance capture
+
+
+# ---------------------------------------------------------------------------
+# FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
+# capture full provenance for every messages.create / messages.stream call.
+# ---------------------------------------------------------------------------
+
+class FlowceptAnthropicClient:
+    """
+    Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
+    every ``messages.create`` / ``messages.stream`` call as a FlowCept
+    provenance record (subtype=llm_call) via ``record_llm_call()``.
+
+    Usage (sync)::
+
+        import anthropic
+        from flowcept.agents.autogen.autogen_plugin import FlowceptAnthropicClient
+
+        client = FlowceptAnthropicClient(
+            anthropic.Anthropic(),
+            agent_name="my-agent",
+        )
+        response = client.messages.create(
+            model="claude-3-5-haiku-latest",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+    Usage (async)::
+
+        client = FlowceptAnthropicClient(
+            anthropic.AsyncAnthropic(),
+            agent_name="my-agent",
+        )
+        response = await client.messages.create(...)
+
+    Every call captures: model, temperature, max_tokens, top_p, top_k,
+    stop_sequences, thinking, messages, response text, thinking blocks,
+    tool uses, stop_reason, token usage, and elapsed wall-clock time.
+    """
+
+    def __init__(self, client: Any, agent_name: str | None = None, context: dict | None = None):
+        self._inner = client
+        self._agent_name = agent_name
+        self._context: dict = context or {}
+        self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class _FlowceptAnthropicMessages:
+    """Proxy for client.messages that intercepts create() and stream()."""
+
+    def __init__(self, messages_resource: Any, agent_name: str | None, context: dict):
+        self._inner = messages_resource
+        self._agent_name = agent_name
+        self._context = context
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def create(self, **kwargs) -> Any:
+        import time as _time
+        t0 = _time.time()
+        result = self._inner.create(**kwargs)
+        elapsed = _time.time() - t0
+        self._record(kwargs, result, elapsed, is_stream=False)
+        return result
+
+    async def async_create(self, **kwargs) -> Any:
+        import time as _time
+        t0 = _time.time()
+        result = await self._inner.create(**kwargs)
+        elapsed = _time.time() - t0
+        self._record(kwargs, result, elapsed, is_stream=False)
+        return result
+
+    def stream(self, **kwargs):
+        import time as _time
+        t0 = _time.time()
+        ctx_mgr = self._inner.stream(**kwargs)
+        # Wrap the context manager to capture timing on exit
+        return _FlowceptAnthropicStream(ctx_mgr, kwargs, self._record, t0)
+
+    def _record(self, kwargs: dict, result: Any, elapsed: float, is_stream: bool = False) -> None:
+        try:
+            model = kwargs.get("model", "unknown")
+
+            # Extract response fields
+            text = ""
+            thinking_text = ""
+            tool_uses = []
+            for block in getattr(result, "content", []):
+                btype = getattr(block, "type", None)
+                if btype == "text":
+                    text += getattr(block, "text", "")
+                elif btype == "thinking":
+                    thinking_text += getattr(block, "thinking", "")
+                elif btype == "tool_use":
+                    tool_uses.append({
+                        "id":    getattr(block, "id", None),
+                        "name":  getattr(block, "name", None),
+                        "input": getattr(block, "input", None),
+                    })
+
+            usage = getattr(result, "usage", None)
+            usage_dict = {}
+            if usage is not None:
+                for attr in ("input_tokens", "output_tokens",
+                             "cache_creation_input_tokens", "cache_read_input_tokens"):
+                    val = getattr(usage, attr, None)
+                    if val is not None:
+                        usage_dict[attr] = val
+
+            ctx = dict(self._context)
+            if self._agent_name:
+                ctx["agent_name"] = self._agent_name
+            ctx["framework"] = "autogen"
+
+            payload: dict = {
+                "type":              "chat_completion",
+                "model":             model,
+                "model_used":        getattr(result, "model", model),
+                "messages":          kwargs.get("messages"),
+                "system_prompt":     kwargs.get("system"),
+                "max_tokens":        kwargs.get("max_tokens"),
+                "temperature":       kwargs.get("temperature"),
+                "top_p":             kwargs.get("top_p"),
+                "top_k":             kwargs.get("top_k"),
+                "stop_sequences":    kwargs.get("stop_sequences"),
+                "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
+                "tools_provided":    [t.get("name") for t in (kwargs.get("tools") or [])],
+                "tool_choice":       kwargs.get("tool_choice"),
+                "text":              text,
+                "thinking_text":     thinking_text or None,
+                "finish_reason":     getattr(result, "stop_reason", None),
+                "stop_sequence":     getattr(result, "stop_sequence", None),
+                "tool_uses":         tool_uses or None,
+                "response_id":       getattr(result, "id", None),
+                "usage":             usage_dict,
+                "elapsed_s":         elapsed,
+                "context":           ctx,
+            }
+            record_llm_call({k: v for k, v in payload.items() if v is not None})
+        except Exception:
+            pass  # never break user code due to provenance capture
+
+
+class _FlowceptAnthropicStream:
+    """Thin wrapper around anthropic streaming context manager."""
+
+    def __init__(self, ctx_mgr: Any, kwargs: dict, record_fn, t0: float):
+        self._ctx_mgr = ctx_mgr
+        self._kwargs = kwargs
+        self._record_fn = record_fn
+        self._t0 = t0
+        self._stream = None
+
+    def __enter__(self):
+        self._stream = self._ctx_mgr.__enter__()
+        return self._stream
+
+    def __exit__(self, *args):
+        import time as _time
+        result = None
+        try:
+            result = self._stream.get_final_message()
+        except Exception:
+            pass
+        elapsed = _time.time() - self._t0
+        if result is not None:
+            self._record_fn(self._kwargs, result, elapsed, is_stream=True)
+        return self._ctx_mgr.__exit__(*args)
 
 
 def openai_chat(
@@ -737,6 +1212,7 @@ class FlowceptAutoGenPlugin:
             self._started = True
             global _ACTIVE_INTERCEPTOR
             _ACTIVE_INTERCEPTOR = self._interceptor
+            _install_autogen_patches()
             wf_id = self._interceptor._workflow_id
             print(
                 f"[FlowceptAutoGenPlugin] Started\n"
@@ -820,6 +1296,7 @@ class FlowceptAutoGenPlugin:
         except Exception as e:
             print(f"[FlowceptAutoGenPlugin] Warning during stop: {e!r}", flush=True)
         self._started = False
+        _uninstall_autogen_patches()
         print("[FlowceptAutoGenPlugin] Stopped.", flush=True)
         self._maybe_write_perf_csv()
         global _ACTIVE_INTERCEPTOR

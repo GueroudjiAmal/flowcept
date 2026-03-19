@@ -14,6 +14,35 @@ A final openai_chat() call interprets the combined result.
 Run
 ---
     OPENAI_API_KEY=sk-... python examples/agents/combined_example.py
+
+Plugin configuration
+--------------------
+Enable all four plugins in your settings.yaml:
+
+    plugins:
+      academy:
+        enabled: true
+        kind: academy
+        workflow_name: "combined-academy"
+        performance_tracking: true
+      autogen:
+        enabled: true
+        kind: autogen
+        workflow_name: "combined-autogen"
+        performance_tracking: true
+      crewai:
+        enabled: true
+        kind: crewai
+        workflow_name: "combined-crewai"
+        performance_tracking: true
+      langgraph:
+        enabled: true
+        kind: langgraph
+        workflow_name: "combined-langgraph"
+        performance_tracking: true
+
+Flowcept auto-starts/stops all plugins and shares its campaign_id across them.
+Access running plugins via flowcept.plugins["<name>"] when needed.
 """
 from __future__ import annotations
 
@@ -21,23 +50,20 @@ import asyncio
 import os
 import sys
 import concurrent.futures
-from typing import AsyncGenerator, Sequence
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
-from flowcept.agents.academy.academy_plugin  import FlowceptAcademyPlugin,  openai_chat
-from flowcept.agents.autogen.autogen_plugin  import FlowceptAutoGenPlugin
-from flowcept.agents.crewai.crewai_plugin    import FlowceptCrewAIPlugin
-from flowcept.agents.langgraph.langgraph_plugin import FlowceptLangGraphPlugin
+from flowcept import Flowcept
+from flowcept.agents.academy.academy_plugin import openai_chat
 
 
 # ============================================================
 # ACADEMY
 # ============================================================
 
-def _run_academy(plugin: FlowceptAcademyPlugin) -> int:
+def _run_academy(plugin) -> int:
     from academy.agent import Agent, action, loop
     from academy.exchange import LocalExchangeFactory
     from academy.manager import Manager
@@ -113,14 +139,12 @@ def _run_academy(plugin: FlowceptAcademyPlugin) -> int:
 # AUTOGEN
 # ============================================================
 
-def _run_autogen(plugin: FlowceptAutoGenPlugin) -> int:
+def _run_autogen(plugin) -> int:
     try:
         from autogen_agentchat.agents import AssistantAgent
         from autogen_agentchat.conditions import MaxMessageTermination
         from autogen_agentchat.teams import RoundRobinGroupChat
-        from autogen_core.models import (
-            ChatCompletionClient, CreateResult, RequestUsage, LLMMessage,
-        )
+        from autogen_core.models import ChatCompletionClient, CreateResult, RequestUsage
     except ImportError:
         print("[AutoGen] not installed — skipping", file=sys.stderr)
         return 0
@@ -140,22 +164,26 @@ def _run_autogen(plugin: FlowceptAutoGenPlugin) -> int:
             from autogen_core.models import ModelInfo
             return ModelInfo(vision=False, function_calling=False, json_output=False,
                              family="stub", structured_output=False)
+
         @property
         def capabilities(self):
             from autogen_core.models import ModelCapabilities
             return ModelCapabilities(vision=False, function_calling=False, json_output=False)
-        async def create(self, messages: Sequence[LLMMessage], **kwargs) -> CreateResult:
+
+        async def create(self, *_, **__) -> CreateResult:
             content = _responses[_idx[0] % len(_responses)]
             _idx[0] += 1
             return CreateResult(content=content,
                                 usage=RequestUsage(prompt_tokens=10, completion_tokens=10),
                                 finish_reason="stop", cached=False)
-        async def create_stream(self, messages, **kwargs) -> AsyncGenerator:
-            yield await self.create(messages)
+
+        async def create_stream(self, *_, **__):
+            yield await self.create()
+
         def actual_usage(self): return RequestUsage(0, 0)
         def total_usage(self):  return RequestUsage(0, 0)
-        def count_tokens(self, *a, **k): return 0
-        def remaining_tokens(self, *a, **k): return 4096
+        def count_tokens(self, *_, **__): return 0
+        def remaining_tokens(self, *_, **__): return 4096
         async def close(self): pass
 
     client = _Stub()
@@ -178,7 +206,6 @@ def _run_autogen(plugin: FlowceptAutoGenPlugin) -> int:
             "Increment a counter 5 times with step values 1,2,3,4,5 and report totals.",
             team_name="counter-team",
         )
-        # parse final total from messages
         total = 0
         for msg in result.messages:
             for token in getattr(msg, "content", "").split():
@@ -197,7 +224,7 @@ def _run_autogen(plugin: FlowceptAutoGenPlugin) -> int:
 # CREWAI
 # ============================================================
 
-def _run_crewai(plugin: FlowceptCrewAIPlugin) -> int:
+def _run_crewai(_plugin) -> int:
     try:
         from crewai import Agent, Task, Crew, LLM
     except ImportError:
@@ -221,7 +248,7 @@ def _run_crewai(plugin: FlowceptCrewAIPlugin) -> int:
     ]
     _idx = [0]
 
-    def _stub(*a, **k):
+    def _stub(*_, **__):
         c = _responses[_idx[0] % len(_responses)]
         _idx[0] += 1
         return _fake_completion(c)
@@ -263,7 +290,7 @@ def _run_crewai(plugin: FlowceptCrewAIPlugin) -> int:
 # LANGGRAPH
 # ============================================================
 
-def _run_langgraph(plugin: FlowceptLangGraphPlugin) -> int:
+def _run_langgraph(plugin) -> int:
     try:
         from langgraph.graph import StateGraph, END
     except ImportError:
@@ -305,66 +332,52 @@ def _run_langgraph(plugin: FlowceptLangGraphPlugin) -> int:
 # ============================================================
 
 def main() -> None:
-    import uuid
-    campaign_id = str(uuid.uuid4())
-    print(f"[combined] campaign_id = {campaign_id}\n", flush=True)
+    print("[combined] Starting all four frameworks …\n", flush=True)
 
-    # --- start all four plugins with a shared campaign_id ---
-    academy_plugin  = FlowceptAcademyPlugin(config={
-        "enabled": True, "workflow_name": "combined-academy",   "campaign_id": campaign_id, "performance_tracking": True})
-    autogen_plugin  = FlowceptAutoGenPlugin(config={
-        "enabled": True, "workflow_name": "combined-autogen",   "campaign_id": campaign_id, "performance_tracking": True})
-    crewai_plugin   = FlowceptCrewAIPlugin(config={
-        "enabled": True, "workflow_name": "combined-crewai",    "campaign_id": campaign_id, "performance_tracking": True})
-    langgraph_plugin = FlowceptLangGraphPlugin(config={
-        "enabled": True, "workflow_name": "combined-langgraph", "campaign_id": campaign_id, "performance_tracking": True})
+    with Flowcept() as flowcept:
+        academy_plugin  = flowcept.plugins.get("academy")
+        autogen_plugin  = flowcept.plugins.get("autogen")
+        crewai_plugin   = flowcept.plugins.get("crewai")
+        langgraph_plugin = flowcept.plugins.get("langgraph")
 
-    for p in (academy_plugin, autogen_plugin, crewai_plugin, langgraph_plugin):
-        p.start()
+        print(f"[combined] campaign_id = {flowcept.campaign_id}\n", flush=True)
 
-    print("\n[combined] All four frameworks starting concurrently …\n", flush=True)
+        print("[combined] All four frameworks starting concurrently …\n", flush=True)
 
-    results: dict[str, int] = {}
+        results: dict[str, int] = {}
 
-    # --- run all four in parallel threads ---
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        futures = {
-            pool.submit(_run_academy,   academy_plugin):   "academy",
-            pool.submit(_run_autogen,   autogen_plugin):   "autogen",
-            pool.submit(_run_crewai,    crewai_plugin):    "crewai",
-            pool.submit(_run_langgraph, langgraph_plugin): "langgraph",
-        }
-        for future in concurrent.futures.as_completed(futures):
-            name = futures[future]
-            try:
-                results[name] = future.result()
-            except Exception as exc:
-                print(f"[combined] {name} raised: {exc}", flush=True)
-                results[name] = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {
+                pool.submit(_run_academy,   academy_plugin):   "academy",
+                pool.submit(_run_autogen,   autogen_plugin):   "autogen",
+                pool.submit(_run_crewai,    crewai_plugin):    "crewai",
+                pool.submit(_run_langgraph, langgraph_plugin): "langgraph",
+            }
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
+                try:
+                    results[name] = future.result()
+                except Exception as exc:
+                    print(f"[combined] {name} raised: {exc}", flush=True)
+                    results[name] = 0
 
-    combined_total = sum(results.values())
+        combined_total = sum(results.values())
 
-    # --- single LLM call to interpret the combined result ---
-    print("\n[combined] Calling openai_chat() to interpret combined result …", flush=True)
-    interpretation = openai_chat(
-        prompt=(
-            f"Four independent frameworks (Academy, AutoGen, CrewAI, LangGraph) each "
-            f"incremented a counter 5 times with values 1, 2, 3, 4, 5, each reaching 15. "
-            f"Combined total = {combined_total}. "
-            f"In exactly one sentence, explain what this combined result represents."
-        ),
-        model="gpt-4o-mini",
-        system="You are a concise data analyst.",
-        temperature=0.3,
-        context={"example": "combined", "call_type": "interpret_result"},
-    )
-    print(f"\n[combined] LLM says: {interpretation}\n", flush=True)
+        print("\n[combined] Calling openai_chat() to interpret combined result …", flush=True)
+        interpretation = openai_chat(
+            prompt=(
+                f"Four independent frameworks (Academy, AutoGen, CrewAI, LangGraph) each "
+                f"incremented a counter 5 times with values 1, 2, 3, 4, 5, each reaching 15. "
+                f"Combined total = {combined_total}. "
+                f"In exactly one sentence, explain what this combined result represents."
+            ),
+            model="gpt-4o-mini",
+            system="You are a concise data analyst.",
+            temperature=0.3,
+            context={"example": "combined", "call_type": "interpret_result"},
+        )
+        print(f"\n[combined] LLM says: {interpretation}\n", flush=True)
 
-    # --- stop all four plugins ---
-    for p in (academy_plugin, autogen_plugin, crewai_plugin, langgraph_plugin):
-        p.stop()
-
-    # --- report ---
     print("\n" + "=" * 60)
     print("COMBINED RESULT")
     print("=" * 60)

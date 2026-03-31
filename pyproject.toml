@@ -120,6 +120,11 @@ all = [
 [tool.hatch.version]
 path = "src/flowcept/version.py"
 
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+
 [tool.ruff]
 line-length = 120
 

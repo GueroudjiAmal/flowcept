@@ -261,6 +261,29 @@ class AcademyInterceptor:
         wf.name = workflow_name
         self._interceptor.send_workflow_message(wf)
 
+    def start_worker(self, workflow_id: str, campaign_id: str) -> None:
+        """
+        Initialize this interceptor inside a worker process that shares an
+        existing workflow.
+
+        Unlike ``start()``, this method reuses the provided *workflow_id* and
+        *campaign_id* (already emitted by the parent process) so that all
+        provenance records from every worker process appear under the same
+        top-level WorkflowObject.  No new WorkflowObject is emitted.
+
+        Called automatically by ``_worker_init()``; use ``make_process_executor()``
+        rather than calling this directly.
+        """
+        from flowcept.flowceptor.adapters.base_interceptor import BaseInterceptor
+
+        self._workflow_id = workflow_id
+        self._campaign_id = campaign_id
+        self._interceptor = BaseInterceptor(kind="academy")
+        self._interceptor.start(
+            bundle_exec_id=self._workflow_id,
+            check_safe_stops=False,
+        )
+
     def stop(self) -> None:
         if self._interceptor is None:
             return
@@ -349,6 +372,118 @@ _AGENT_WORKFLOWS: dict[str, str] = {}
 # Reverse map: Academy agent ID → agent class name, for enriching records that
 # only have the academy ID (e.g. embed calls whose ctx has no "agent" key).
 _AGENT_ID_TO_TYPE: dict[str, str] = {}
+
+
+# ---------------------------------------------------------------------------
+# Process-pool support — picklable worker initializer + executor factory
+# ---------------------------------------------------------------------------
+
+def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool) -> None:
+    """
+    ``ProcessPoolExecutor`` initializer for Flowcept provenance capture.
+
+    Called automatically once per worker process before any agents run.
+    Sets up a fresh ``AcademyInterceptor`` that shares the parent's
+    *workflow_id* and *campaign_id* so all records appear in the same
+    provenance graph, patches ``academy.runtime.Runtime``, and registers
+    an atexit handler to flush the buffer when the worker exits.
+
+    Do not call directly — use ``make_process_executor()`` instead.
+    """
+    import atexit
+    global _ACTIVE_INTERCEPTOR, _PROV_STATS
+    try:
+        interceptor = AcademyInterceptor()
+        interceptor.start_worker(workflow_id, campaign_id)
+        _ACTIVE_INTERCEPTOR = interceptor
+        _install_runtime_patches()
+        _PROV_STATS = _ProvenanceStats() if perf_tracking else None
+        atexit.register(_worker_shutdown)
+    except Exception as e:
+        _log.warning(
+            "[Flowcept] Worker process init failed: %r — provenance disabled in this worker.", e
+        )
+
+
+def _worker_shutdown() -> None:
+    """
+    Atexit handler registered by ``_worker_init``.
+
+    Flushes the worker's local provenance buffer to the MQ before the
+    process exits, ensuring no records are lost.
+    """
+    global _ACTIVE_INTERCEPTOR
+    interceptor = _ACTIVE_INTERCEPTOR
+    if interceptor is None:
+        return
+    try:
+        interceptor.stop()
+    except Exception:
+        pass
+    _ACTIVE_INTERCEPTOR = None
+
+
+def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecutor":
+    """
+    Create a ``ProcessPoolExecutor`` with Flowcept provenance capture
+    pre-wired into every worker process.
+
+    Must be called while the Academy plugin is active — i.e., inside a
+    ``with Flowcept():`` block after the plugin has started — so that the
+    current ``workflow_id`` and ``campaign_id`` can be forwarded to workers.
+
+    Each worker process receives its own ``AcademyInterceptor`` connected
+    to the same MQ backend.  All task records carry the shared
+    *workflow_id* / *campaign_id*, so the full provenance graph is coherent
+    across processes.
+
+    Parameters
+    ----------
+    max_workers : int, optional
+        Number of worker processes.  Defaults to ``os.cpu_count()``.
+
+    Returns
+    -------
+    ProcessPoolExecutor
+        Pass directly to ``Manager.from_exchange_factory(executors=executor)``.
+
+    Raises
+    ------
+    RuntimeError
+        If called before the Academy plugin has started.
+
+    Example
+    -------
+    ::
+
+        from flowcept import Flowcept
+        from flowcept.agents.academy.academy_plugin import make_process_executor
+
+        with Flowcept():
+            executor = make_process_executor(max_workers=4)
+            async with await Manager.from_exchange_factory(
+                factory=exchange, executors=executor,
+            ) as manager:
+                counter = await manager.launch(CounterAgent)
+                ...
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    interceptor = _ACTIVE_INTERCEPTOR
+    if interceptor is None:
+        raise RuntimeError(
+            "make_process_executor() must be called while the Flowcept Academy "
+            "plugin is running (inside a 'with Flowcept():' block)."
+        )
+    return ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_worker_init,
+        initargs=(
+            interceptor._workflow_id,
+            interceptor._campaign_id,
+            _PROV_STATS is not None,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,9 @@ Run
 ---
     OPENAI_API_KEY=sk-... python examples/agents/academy/academy_example.py
 
+    # Use a ProcessPoolExecutor instead of threads:
+    OPENAI_API_KEY=sk-... ACADEMY_EXECUTOR=process python examples/agents/academy/academy_example.py
+
 Plugin configuration
 --------------------
 The FlowceptAcademyPlugin can be activated without any code changes by enabling
@@ -29,13 +32,28 @@ it in your settings.yaml:
 When enabled this way, Flowcept.start() / .stop() (or the context manager)
 will automatically start and stop the plugin — no explicit plugin.start() /
 plugin.stop() calls needed in your code.
+
+Executor modes
+--------------
+ThreadPoolExecutor (default):
+    All agents run as threads in the same process.  The plugin's in-process
+    patches and module-level state are visible to all agents automatically.
+
+ProcessPoolExecutor:
+    Each agent runs in a separate OS process.  Use ``make_process_executor()``
+    instead of ``ThreadPoolExecutor()`` — it pre-wires the Flowcept initializer
+    into every worker so provenance is captured identically to the thread case.
+    All records share the same workflow_id / campaign_id as the parent.
+
+    Note: call ``make_process_executor()`` INSIDE the ``with Flowcept():`` block
+    so the plugin is already started when the executor is created.
 """
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -44,7 +62,7 @@ from academy.exchange import LocalExchangeFactory
 from academy.logging import init_logging
 from academy.manager import Manager
 
-from flowcept.agents.academy.academy_plugin import openai_chat
+from flowcept.agents.academy.academy_plugin import make_process_executor, openai_chat
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +171,8 @@ class SummaryAgent(Agent):
 # ---------------------------------------------------------------------------
 
 
-async def _run() -> None:
+async def _run(executor) -> None:
     exchange = LocalExchangeFactory()
-    executor = ThreadPoolExecutor(max_workers=4)
 
     async with await Manager.from_exchange_factory(
         factory=exchange,
@@ -185,13 +202,20 @@ async def _run() -> None:
 def main() -> None:
     init_logging("INFO")
 
-    # The academy plugin is configured in settings.yaml under plugins.academy.
-    # Flowcept reads that config and auto-starts/stops the plugin — no explicit
-    # plugin.start() / plugin.stop() calls needed here.
+    use_processes = os.environ.get("ACADEMY_EXECUTOR", "thread").lower() == "process"
+
     from flowcept import Flowcept
 
     with Flowcept():
-        asyncio.run(_run())
+        # make_process_executor() must be called inside the Flowcept context so
+        # the plugin is already started and its workflow_id / campaign_id can be
+        # forwarded to each worker process via the ProcessPoolExecutor initializer.
+        if use_processes:
+            executor = make_process_executor(max_workers=4)
+        else:
+            executor = ThreadPoolExecutor(max_workers=4)
+
+        asyncio.run(_run(executor))
 
 
 if __name__ == "__main__":

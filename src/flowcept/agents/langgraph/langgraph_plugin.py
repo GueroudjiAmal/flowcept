@@ -42,10 +42,10 @@ Or as a context manager:
 from __future__ import annotations
 
 import os
-
 import time
 import uuid
 import logging
+from contextlib import contextmanager
 from typing import Any, Union
 from uuid import UUID
 
@@ -750,6 +750,17 @@ _HANDLER_CLASS = None
 # ---------------------------------------------------------------------------
 
 _ACTIVE_INTERCEPTOR = None
+_PROV_STATS: _ProvenanceStats | None = None
+
+
+@contextmanager
+def _timed(category: str):
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        if _PROV_STATS is not None:
+            _PROV_STATS.record(category, time.perf_counter() - t0)
 
 
 def record_llm_call(payload: dict) -> None:
@@ -769,47 +780,47 @@ def record_llm_call(payload: dict) -> None:
     if interceptor is None:
         return
     import uuid as _uuid
-    import time as _time
 
-    elapsed = payload.get("elapsed_s", 0.0)
-    now = _time.time()
-    model = payload.get("model_used") or payload.get("model", "unknown")
+    with _timed("record_llm_call"):
+        elapsed = payload.get("elapsed_s", 0.0)
+        now = time.time()
+        model = payload.get("model_used") or payload.get("model", "unknown")
 
-    used: dict = {}
-    for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
-              "temperature", "top_p", "max_tokens", "reasoning_effort",
-              "tools_provided", "tool_choice", "stop_sequences", "top_k",
-              "thinking_budget_tokens"):
-        if k in payload:
-            used[k] = payload[k]
-    if payload.get("temperature_suppressed"):
-        used["temperature_suppressed"] = True
+        used: dict = {}
+        for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
+                  "temperature", "top_p", "max_tokens", "reasoning_effort",
+                  "tools_provided", "tool_choice", "stop_sequences", "top_k",
+                  "thinking_budget_tokens"):
+            if k in payload:
+                used[k] = payload[k]
+        if payload.get("temperature_suppressed"):
+            used["temperature_suppressed"] = True
 
-    generated: dict = {}
-    for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
-              "tool_calls", "tool_uses", "thinking_text",
-              "system_fingerprint", "response_id", "usage", "elapsed_s"):
-        if k in payload:
-            generated[k] = payload[k]
-    if "error" in payload:
-        generated["error"] = str(payload["error"])
+        generated: dict = {}
+        for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
+                  "tool_calls", "tool_uses", "thinking_text",
+                  "system_fingerprint", "response_id", "usage", "elapsed_s"):
+            if k in payload:
+                generated[k] = payload[k]
+        if "error" in payload:
+            generated["error"] = str(payload["error"])
 
-    task: dict = {
-        "task_id":      str(_uuid.uuid4()),
-        "subtype":      "llm_call",
-        "activity_id":  model,
-        "started_at":   now - elapsed,
-        "ended_at":     now,
-        "status":       "ERROR" if "error" in payload else "FINISHED",
-        "used":         used,
-        "generated":    generated,
-        "custom_metadata": {
-            "model":     model,
-            "framework": payload.get("context", {}).get("framework", ""),
-            "context":   payload.get("context", {}),
-        },
-    }
-    interceptor.intercept_task(task)
+        task: dict = {
+            "task_id":      str(_uuid.uuid4()),
+            "subtype":      "llm_call",
+            "activity_id":  model,
+            "started_at":   now - elapsed,
+            "ended_at":     now,
+            "status":       "ERROR" if "error" in payload else "FINISHED",
+            "used":         used,
+            "generated":    generated,
+            "custom_metadata": {
+                "model":     model,
+                "framework": payload.get("context", {}).get("framework", ""),
+                "context":   payload.get("context", {}),
+            },
+        }
+        interceptor.intercept_task(task)
 
 
 def openai_chat(
@@ -1262,6 +1273,8 @@ class FlowceptLangGraphPlugin:
             _HANDLER_CLASS = _build_handler_class()
         inst._stats = _ProvenanceStats() if (config or {}).get("performance_tracking", True) else None
         inst._handler = _HANDLER_CLASS(interceptor, inst._stats)
+        global _PROV_STATS
+        _PROV_STATS = inst._stats
         return inst
 
     @property
@@ -1275,7 +1288,7 @@ class FlowceptLangGraphPlugin:
         return self._handler
 
     def start(self) -> "FlowceptLangGraphPlugin":
-        global _HANDLER_CLASS, _ACTIVE_INTERCEPTOR
+        global _HANDLER_CLASS, _ACTIVE_INTERCEPTOR, _PROV_STATS
         if not self._enabled or self._started:
             return self
         if not self._owns_interceptor:
@@ -1283,6 +1296,7 @@ class FlowceptLangGraphPlugin:
             return self
         try:
             self._stats = _ProvenanceStats() if self._perf_tracking else None
+            _PROV_STATS = self._stats
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
 
             if _HANDLER_CLASS is None:
@@ -1314,7 +1328,7 @@ class FlowceptLangGraphPlugin:
         return self
 
     def stop(self) -> None:
-        global _ACTIVE_INTERCEPTOR
+        global _ACTIVE_INTERCEPTOR, _PROV_STATS
         if not self._started:
             return
         if not self._owns_interceptor:
@@ -1328,14 +1342,19 @@ class FlowceptLangGraphPlugin:
             )
             self._maybe_write_perf_csv()
             _ACTIVE_INTERCEPTOR = None
+            _PROV_STATS = None
             return
         try:
+            _t0 = time.perf_counter()
             self._interceptor.stop()
+            if self._stats is not None:
+                self._stats.record("flush", time.perf_counter() - _t0)
         except Exception as e:
             print(f"[FlowceptLangGraphPlugin] Warning during stop: {e!r}", flush=True)
         self._started = False
         print("[FlowceptLangGraphPlugin] Stopped.", flush=True)
         self._maybe_write_perf_csv()
+        _PROV_STATS = None
         _ACTIVE_INTERCEPTOR = None
 
     def _maybe_write_perf_csv(self) -> None:

@@ -54,6 +54,7 @@ import time
 import uuid
 import threading
 import logging
+from contextlib import contextmanager
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -339,7 +340,8 @@ async def _run_with_provenance(
     run_start   = time.time()
 
     # Emit a sub-WorkflowObject for this team run
-    interceptor.send_graph_workflow(team_name, group_id)
+    with _timed("send_graph_workflow"):
+        interceptor.send_graph_workflow(team_name, group_id)
 
     custom_meta: dict = {"team_name": team_name, "framework": "autogen"}
     if source_agent_id:
@@ -417,7 +419,8 @@ async def _run_with_provenance(
             "stderr":      str(exc),
             "custom_metadata": custom_meta,
         }
-        interceptor.intercept_task(run_task)
+        with _timed("run_emit"):
+            interceptor.intercept_task(run_task)
         _current_autogen_task_id.reset(_token_task)
         _current_autogen_agent_id.reset(_token_agent)
         raise
@@ -450,7 +453,8 @@ async def _run_with_provenance(
         },
         "custom_metadata": custom_meta,
     }
-    interceptor.intercept_task(run_task)
+    with _timed("run_emit"):
+        interceptor.intercept_task(run_task)
 
     return final_result
 
@@ -460,6 +464,17 @@ async def _run_with_provenance(
 # ---------------------------------------------------------------------------
 
 _ACTIVE_INTERCEPTOR = None
+_PROV_STATS: _ProvenanceStats | None = None
+
+
+@contextmanager
+def _timed(category: str):
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        if _PROV_STATS is not None:
+            _PROV_STATS.record(category, time.perf_counter() - t0)
 
 
 async def run_team(
@@ -513,7 +528,7 @@ async def run_team(
         team=team,
         task=task,
         interceptor=interceptor,
-        stats=None,
+        stats=_PROV_STATS,
         team_name=name,
         source_agent_id=source_agent_id,
     )
@@ -536,58 +551,58 @@ def record_llm_call(payload: dict) -> None:
     if interceptor is None:
         return
     import uuid as _uuid
-    import time as _time
 
-    elapsed = payload.get("elapsed_s", 0.0)
-    now = _time.time()
-    model = payload.get("model_used") or payload.get("model", "unknown")
+    with _timed("record_llm_call"):
+        elapsed = payload.get("elapsed_s", 0.0)
+        now = time.time()
+        model = payload.get("model_used") or payload.get("model", "unknown")
 
-    used: dict = {}
-    for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
-              "temperature", "top_p", "max_tokens", "reasoning_effort",
-              "tools_provided", "tool_choice", "stop_sequences", "top_k",
-              "thinking_budget_tokens"):
-        if k in payload:
-            used[k] = payload[k]
-    if payload.get("temperature_suppressed"):
-        used["temperature_suppressed"] = True
+        used: dict = {}
+        for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
+                  "temperature", "top_p", "max_tokens", "reasoning_effort",
+                  "tools_provided", "tool_choice", "stop_sequences", "top_k",
+                  "thinking_budget_tokens"):
+            if k in payload:
+                used[k] = payload[k]
+        if payload.get("temperature_suppressed"):
+            used["temperature_suppressed"] = True
 
-    generated: dict = {}
-    for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
-              "tool_calls", "tool_uses", "thinking_text",
-              "system_fingerprint", "response_id", "usage", "elapsed_s"):
-        if k in payload:
-            generated[k] = payload[k]
-    if "error" in payload:
-        generated["error"] = str(payload["error"])
+        generated: dict = {}
+        for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
+                  "tool_calls", "tool_uses", "thinking_text",
+                  "system_fingerprint", "response_id", "usage", "elapsed_s"):
+            if k in payload:
+                generated[k] = payload[k]
+        if "error" in payload:
+            generated["error"] = str(payload["error"])
 
-    # Propagate agent linkage from contextvars (set by _run_with_provenance)
-    parent_task_id = _current_autogen_task_id.get(None)
-    agent_id = (
-        payload.get("context", {}).get("agent_name")
-        or _current_autogen_agent_id.get(None)
-    )
+        # Propagate agent linkage from contextvars (set by _run_with_provenance)
+        parent_task_id = _current_autogen_task_id.get(None)
+        agent_id = (
+            payload.get("context", {}).get("agent_name")
+            or _current_autogen_agent_id.get(None)
+        )
 
-    task: dict = {
-        "task_id":      str(_uuid.uuid4()),
-        "subtype":      "llm_call",
-        "activity_id":  model,
-        "started_at":   now - elapsed,
-        "ended_at":     now,
-        "status":       "ERROR" if "error" in payload else "FINISHED",
-        "used":         used,
-        "generated":    generated,
-        "custom_metadata": {
-            "model":     model,
-            "framework": payload.get("context", {}).get("framework", ""),
-            "context":   payload.get("context", {}),
-        },
-    }
-    if parent_task_id:
-        task["parent_task_id"] = parent_task_id
-    if agent_id:
-        task["custom_metadata"]["agent_id"] = agent_id
-    interceptor.intercept_task(task)
+        task: dict = {
+            "task_id":      str(_uuid.uuid4()),
+            "subtype":      "llm_call",
+            "activity_id":  model,
+            "started_at":   now - elapsed,
+            "ended_at":     now,
+            "status":       "ERROR" if "error" in payload else "FINISHED",
+            "used":         used,
+            "generated":    generated,
+            "custom_metadata": {
+                "model":     model,
+                "framework": payload.get("context", {}).get("framework", ""),
+                "context":   payload.get("context", {}),
+            },
+        }
+        if parent_task_id:
+            task["parent_task_id"] = parent_task_id
+        if agent_id:
+            task["custom_metadata"]["agent_id"] = agent_id
+        interceptor.intercept_task(task)
 
 
 # ---------------------------------------------------------------------------
@@ -1199,6 +1214,8 @@ class FlowceptAutoGenPlugin:
         _ACTIVE_INTERCEPTOR = interceptor
 
         inst._stats = _ProvenanceStats() if (config or {}).get("performance_tracking", True) else None
+        global _PROV_STATS
+        _PROV_STATS = inst._stats
         return inst
 
     def start(self) -> "FlowceptAutoGenPlugin":
@@ -1208,6 +1225,8 @@ class FlowceptAutoGenPlugin:
             return self
         try:
             self._stats = _ProvenanceStats() if self._perf_tracking else None
+            global _PROV_STATS
+            _PROV_STATS = self._stats
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
             self._started = True
             global _ACTIVE_INTERCEPTOR
@@ -1290,9 +1309,14 @@ class FlowceptAutoGenPlugin:
                 flush=True,
             )
             self._maybe_write_perf_csv()
+            global _PROV_STATS
+            _PROV_STATS = None
             return
         try:
+            _t0 = time.perf_counter()
             self._interceptor.stop()
+            if self._stats is not None:
+                self._stats.record("flush", time.perf_counter() - _t0)
         except Exception as e:
             print(f"[FlowceptAutoGenPlugin] Warning during stop: {e!r}", flush=True)
         self._started = False
@@ -1301,6 +1325,7 @@ class FlowceptAutoGenPlugin:
         self._maybe_write_perf_csv()
         global _ACTIVE_INTERCEPTOR
         _ACTIVE_INTERCEPTOR = None
+        _PROV_STATS = None
 
     def _maybe_write_perf_csv(self) -> None:
         if self._stats is None:

@@ -2,51 +2,30 @@
 examples/agents/academy/academy_example.py
 ==========================================
 
-Academy example — two agents, FlowCept plugin, LLM call.
+Academy example — two agents, FlowCept plugin, no LLM dependency.
 
 Agents
 ------
-CounterAgent   : holds an integer counter.  Actions: increment(n), get_value().
-SummaryAgent   : increments the counter 5 times (1+2+3+4+5 = 15), then calls
-               openai_chat() to interpret the result.
+CounterAgent  : holds an integer counter.  Actions: increment(n), get_value().
+SummaryAgent  : increments the counter 5 times (1+2+3+4+5 = 15), then reads
+                the final value.
 
 Run
 ---
-    OPENAI_API_KEY=sk-... python examples/agents/academy/academy_example.py
+    # Thread executor (default):
+    python examples/agents/academy/academy_example.py
 
-    # Use a ProcessPoolExecutor instead of threads:
-    OPENAI_API_KEY=sk-... ACADEMY_EXECUTOR=process python examples/agents/academy/academy_example.py
+    # Process executor — tests the ProcessPoolExecutor monkey-patch:
+    ACADEMY_EXECUTOR=process python examples/agents/academy/academy_example.py
 
-Plugin configuration
---------------------
-The FlowceptAcademyPlugin can be activated without any code changes by enabling
-it in your settings.yaml:
-
-    plugins:
-      academy:
-        enabled: true
-        kind: academy
-        workflow_name: "academy-counter-example"
-        performance_tracking: true
-
-When enabled this way, Flowcept.start() / .stop() (or the context manager)
-will automatically start and stop the plugin — no explicit plugin.start() /
-plugin.stop() calls needed in your code.
-
-Executor modes
---------------
-ThreadPoolExecutor (default):
-    All agents run as threads in the same process.  The plugin's in-process
-    patches and module-level state are visible to all agents automatically.
-
-ProcessPoolExecutor:
-    Each agent runs in a separate OS process.  Use ``make_process_executor()``
-    instead of ``ThreadPoolExecutor()`` — it pre-wires the Flowcept initializer
-    into every worker so provenance is captured identically to the thread case.
-    All records share the same workflow_id / campaign_id as the parent.
-
-    Note: call ``make_process_executor()`` INSIDE the ``with Flowcept():`` block
-    so the plugin is already started when the executor is created.
+ProcessPoolExecutor monkey-patch test
+--------------------------------------
+When ACADEMY_EXECUTOR=process the example creates a plain ProcessPoolExecutor()
+with NO explicit initializer.  The FlowceptAcademyPlugin monkey-patches
+ProcessPoolExecutor.__init__ on start() so _worker_init is injected
+automatically.  If the patch works, the performance report printed by stop()
+will show action_emit / intercept_task / loop_emit / lifecycle_emit rows
+(not just flush), confirming that provenance was captured inside the workers.
 """
 from __future__ import annotations
 
@@ -61,8 +40,6 @@ from academy.agent import Agent, action, loop
 from academy.exchange import LocalExchangeFactory
 from academy.logging import init_logging
 from academy.manager import Manager
-
-from flowcept.agents.academy.academy_plugin import make_process_executor, openai_chat
 
 
 # ---------------------------------------------------------------------------
@@ -90,16 +67,12 @@ class CounterAgent(Agent):
 
 
 class SummaryAgent(Agent):
-    """
-    Calls CounterAgent.increment() several times, reads the total,
-    then calls an LLM to interpret the result.
-    """
+    """Increments the CounterAgent five times and records the final value."""
 
     def __init__(self) -> None:
         super().__init__()
         self._counter = None
         self._result: int = 0
-        self._llm_summary: str = ""
         self._done: bool = False
 
     @action
@@ -112,43 +85,12 @@ class SummaryAgent(Agent):
         return self._result
 
     @action
-    async def get_llm_summary(self) -> str:
-        return self._llm_summary
-
-    @action
     async def is_done(self) -> bool:
         return self._done
 
-    @action
-    async def interpret_result(self, value: int) -> str:
-        """
-        Ask the LLM to interpret the counter value.
-
-        openai_chat() makes the API call and automatically fires record_llm_call()
-        so the plugin captures this as a child TaskObject (subtype=llm_call)
-        linked to this @action via parent_task_id.
-        """
-        prompt = (
-            f"The counter was incremented 5 times with values 1, 2, 3, 4, 5 "
-            f"and reached a final value of {value}. "
-            f"In exactly one sentence, explain what this arithmetic result represents."
-        )
-        summary = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: openai_chat(
-                prompt=prompt,
-                model="gpt-4o-mini",
-                system="You are a concise data analyst.",
-                temperature=0.3,
-                context={"agent": "SummaryAgent", "call_type": "interpret_result"},
-            ),
-        )
-        print(f"[SummaryAgent] LLM says: {summary}", flush=True)
-        return summary
-
     @loop
     async def summary_loop(self, shutdown: asyncio.Event) -> None:
-        """Wait for the counter handle, increment 5 times, then call the LLM."""
+        """Wait for the counter handle, increment 5 times, then finish."""
         while self._counter is None and not shutdown.is_set():
             await asyncio.sleep(0.05)
         if shutdown.is_set():
@@ -161,8 +103,6 @@ class SummaryAgent(Agent):
 
         self._result = await self._counter.get_value()
         print(f"[SummaryAgent] Final counter value: {self._result}", flush=True)
-
-        self._llm_summary = await self.interpret_result(self._result)
         self._done = True
 
 
@@ -192,9 +132,7 @@ async def _run(executor) -> None:
                 break
 
         result = await summary.get_result()
-        llm_summary = await summary.get_llm_summary()
         print(f"\n[driver] Counter reached {result}  (expected 15 = 1+2+3+4+5)", flush=True)
-        print(f"[driver] LLM summary: {llm_summary}\n", flush=True)
         assert result == 15, f"Expected 15 but got {result}"
         print("[driver] Assertion passed.", flush=True)
 
@@ -207,12 +145,16 @@ def main() -> None:
     from flowcept import Flowcept
 
     with Flowcept():
-        # make_process_executor() must be called inside the Flowcept context so
-        # the plugin is already started and its workflow_id / campaign_id can be
-        # forwarded to each worker process via the ProcessPoolExecutor initializer.
         if use_processes:
-            executor = make_process_executor(max_workers=4)
+            # Plain ProcessPoolExecutor — NO explicit initializer.
+            # The monkey-patch installed by FlowceptAcademyPlugin.start() should
+            # inject _worker_init automatically.  If provenance is captured
+            # (action_emit / intercept_task rows appear in the perf report),
+            # the patch is working.
+            print("\n[main] Using ProcessPoolExecutor (monkey-patch test)", flush=True)
+            executor = ProcessPoolExecutor(max_workers=4)
         else:
+            print("\n[main] Using ThreadPoolExecutor", flush=True)
             executor = ThreadPoolExecutor(max_workers=4)
 
         asyncio.run(_run(executor))

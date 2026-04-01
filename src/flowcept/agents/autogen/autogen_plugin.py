@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import os
 
-import asyncio
 import contextvars
 import time
 import uuid
@@ -329,7 +328,6 @@ async def _run_with_provenance(
     Returns the final TaskResult.
     """
     from autogen_agentchat.base import TaskResult
-    from autogen_agentchat.messages import BaseChatMessage, BaseAgentEvent
     from autogen_core import CancellationToken
 
     # Wrap any pre-existing agents' model clients (created before plugin start)

@@ -46,7 +46,7 @@ import time
 import uuid
 import logging
 from contextlib import contextmanager
-from typing import Any, Union
+from typing import Any
 from uuid import UUID
 
 _log = logging.getLogger(__name__)
@@ -401,7 +401,7 @@ class FlowceptLangGraphCallback:
         **kwargs: Any,
     ) -> None:
         t0 = time.perf_counter()
-        started_at = self._run_start.pop(run_id, time.time())
+        self._run_start.pop(run_id, time.time())
         tel_start  = self._run_tel_start.pop(run_id, None)
         tel_end    = self._tel()
         self._run_to_task.pop(run_id, None)
@@ -437,7 +437,7 @@ class FlowceptLangGraphCallback:
         **kwargs: Any,
     ) -> None:
         t0 = time.perf_counter()
-        started_at = self._run_start.pop(run_id, time.time())
+        self._run_start.pop(run_id, time.time())
         tel_start  = self._run_tel_start.pop(run_id, None)
         self._run_to_task.pop(run_id, None)
         is_graph = run_id in self._graph_runs
@@ -506,7 +506,7 @@ class FlowceptLangGraphCallback:
         **kwargs: Any,
     ) -> None:
         t0 = time.perf_counter()
-        started_at = self._run_start.pop(run_id, time.time())
+        self._run_start.pop(run_id, time.time())
         tel_start  = self._run_tel_start.pop(run_id, None)
         tel_end    = self._tel()
         self._run_to_task.pop(run_id, None)

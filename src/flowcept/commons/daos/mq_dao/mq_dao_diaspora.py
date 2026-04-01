@@ -3,7 +3,6 @@ from typing import Callable
 
 import msgpack
 from time import time
-import json
 
 from diaspora_stream.api import Driver, Validator
 
@@ -13,6 +12,7 @@ from flowcept.configs import MQ_SETTINGS, MQ_CHANNEL
 
 class MQDaoDiaspora(MQDao):
     """Main class to communicate with diaspora."""
+
     driver_options = {
         "root_path": "/tmp/diaspora-data/",
     }

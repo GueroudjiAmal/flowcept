@@ -232,7 +232,7 @@ class AcademyInterceptor:
       - stop()                     — flushes and closes the interceptor
       - intercept_task(task_dict)  — enriches with FlowCept standard fields and sends
       - send_agent_workflow(...)   — emits a WorkflowObject for an agent
-      - telemetry_capture          — the underlying TelemetryCapture instance
+      - telemetry_capture          — the underlying TelemetryCapture instance.
     """
 
     def __init__(self) -> None:
@@ -365,6 +365,7 @@ class AcademyInterceptor:
 
 _PATCHER_INSTALLED: bool = False
 _ACTIVE_INTERCEPTOR: AcademyInterceptor | None = None
+_ORIG_PPE_INIT = None  # holds the original ProcessPoolExecutor.__init__ while patched
 
 # Per-agent sub-workflow IDs  {agent_id_str -> sub_workflow_id}
 _AGENT_WORKFLOWS: dict[str, str] = {}
@@ -421,6 +422,51 @@ def _worker_shutdown() -> None:
     except Exception:
         pass
     _ACTIVE_INTERCEPTOR = None
+
+
+def _patch_process_pool_executor() -> None:
+    """
+    Monkey-patch ``ProcessPoolExecutor.__init__`` so any executor created
+    while the Academy plugin is active automatically receives ``_worker_init``
+    as its initializer.
+
+    Only injects when no ``initializer`` is already provided by the caller,
+    so explicit user-supplied initializers are never overridden.
+    Called by ``FlowceptAcademyPlugin.start()``.
+    """
+    global _ORIG_PPE_INIT
+    from concurrent.futures import ProcessPoolExecutor
+
+    if _ORIG_PPE_INIT is not None:
+        return  # already patched
+
+    _ORIG_PPE_INIT = ProcessPoolExecutor.__init__
+    _orig = _ORIG_PPE_INIT  # capture for closure
+
+    def _patched_init(self, max_workers=None, mp_context=None,
+                      initializer=None, initargs=(), **kw):
+        interceptor = _ACTIVE_INTERCEPTOR
+        if initializer is None and interceptor is not None:
+            initializer = _worker_init
+            initargs = (
+                interceptor._workflow_id,
+                interceptor._campaign_id,
+                _PROV_STATS is not None,
+            )
+        _orig(self, max_workers=max_workers, mp_context=mp_context,
+              initializer=initializer, initargs=initargs, **kw)
+
+    ProcessPoolExecutor.__init__ = _patched_init  # type: ignore[method-assign]
+
+
+def _unpatch_process_pool_executor() -> None:
+    """Restore the original ``ProcessPoolExecutor.__init__``. Called by ``stop()``."""
+    global _ORIG_PPE_INIT
+    if _ORIG_PPE_INIT is None:
+        return
+    from concurrent.futures import ProcessPoolExecutor
+    ProcessPoolExecutor.__init__ = _ORIG_PPE_INIT  # type: ignore[method-assign]
+    _ORIG_PPE_INIT = None
 
 
 def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecutor":
@@ -1461,6 +1507,7 @@ class FlowceptAcademyPlugin:
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
             _ACTIVE_INTERCEPTOR = self._interceptor
             _install_runtime_patches()
+            _patch_process_pool_executor()
             if self._llm_hook_register is not None:
                 self._llm_hook_register(_on_llm_call)
             self._started = True
@@ -1492,6 +1539,7 @@ class FlowceptAcademyPlugin:
         if self._llm_hook_unregister is not None:
             self._llm_hook_unregister(_on_llm_call)
         _uninstall_runtime_patches()
+        _unpatch_process_pool_executor()
         try:
             self._interceptor.stop()
         except Exception as e:

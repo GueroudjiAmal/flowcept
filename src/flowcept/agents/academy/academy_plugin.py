@@ -366,6 +366,8 @@ class AcademyInterceptor:
 _PATCHER_INSTALLED: bool = False
 _ACTIVE_INTERCEPTOR: AcademyInterceptor | None = None
 _ORIG_PPE_INIT = None  # holds the original ProcessPoolExecutor.__init__ while patched
+_PERF_CSV_PATH: str | None = None   # set by plugin.start(); forwarded to workers via initargs
+_WORKER_PERF_CSV: str | None = None  # set inside each worker by _worker_init
 
 # Per-agent sub-workflow IDs  {agent_id_str -> sub_workflow_id}
 _AGENT_WORKFLOWS: dict[str, str] = {}
@@ -379,7 +381,8 @@ _AGENT_ID_TO_TYPE: dict[str, str] = {}
 # Process-pool support — picklable worker initializer + executor factory
 # ---------------------------------------------------------------------------
 
-def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool) -> None:
+def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool,
+                 perf_csv: str | None = None) -> None:
     """
     ``ProcessPoolExecutor`` initializer for Flowcept provenance capture.
 
@@ -392,7 +395,8 @@ def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool) -> Non
     Do not call directly — use ``make_process_executor()`` instead.
     """
     import atexit
-    global _ACTIVE_INTERCEPTOR, _PROV_STATS
+    global _ACTIVE_INTERCEPTOR, _PROV_STATS, _WORKER_PERF_CSV
+    _WORKER_PERF_CSV = perf_csv
     try:
         interceptor = AcademyInterceptor()
         interceptor.start_worker(workflow_id, campaign_id)
@@ -411,17 +415,26 @@ def _worker_shutdown() -> None:
     Atexit handler registered by ``_worker_init``.
 
     Flushes the worker's local provenance buffer to the MQ before the
-    process exits, ensuring no records are lost.
+    process exits, ensuring no records are lost.  Also appends this
+    worker's per-category timing rows to the shared perf CSV so that
+    action_emit / loop_emit / etc. from worker processes appear alongside
+    the main process's flush row.
     """
     global _ACTIVE_INTERCEPTOR
     interceptor = _ACTIVE_INTERCEPTOR
     if interceptor is None:
         return
+    wf_id = interceptor._workflow_id  # save before stop() clears _interceptor
     try:
         interceptor.stop()
     except Exception:
         pass
     _ACTIVE_INTERCEPTOR = None
+    if _PROV_STATS is not None and _WORKER_PERF_CSV:
+        try:
+            _PROV_STATS.to_csv(_WORKER_PERF_CSV, workflow_id=wf_id)
+        except Exception:
+            pass
 
 
 def _patch_process_pool_executor() -> None:
@@ -452,6 +465,7 @@ def _patch_process_pool_executor() -> None:
                 interceptor._workflow_id,
                 interceptor._campaign_id,
                 _PROV_STATS is not None,
+                _PERF_CSV_PATH,
             )
         _orig(self, max_workers=max_workers, mp_context=mp_context,
               initializer=initializer, initargs=initargs, **kw)
@@ -528,6 +542,7 @@ def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecuto
             interceptor._workflow_id,
             interceptor._campaign_id,
             _PROV_STATS is not None,
+            _PERF_CSV_PATH,
         ),
     )
 
@@ -1501,17 +1516,18 @@ class FlowceptAcademyPlugin:
     def start(self) -> "FlowceptAcademyPlugin":
         if not self._enabled or self._started:
             return self
-        global _ACTIVE_INTERCEPTOR, _PROV_STATS
+        global _ACTIVE_INTERCEPTOR, _PROV_STATS, _PERF_CSV_PATH
         try:
             _PROV_STATS = _ProvenanceStats() if self._perf_tracking else None
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
             _ACTIVE_INTERCEPTOR = self._interceptor
+            wf_id = self._interceptor._workflow_id
+            _PERF_CSV_PATH = self._perf_csv or f"provenance_perf_{wf_id}.csv"
             _install_runtime_patches()
             _patch_process_pool_executor()
             if self._llm_hook_register is not None:
                 self._llm_hook_register(_on_llm_call)
             self._started = True
-            wf_id = self._interceptor._workflow_id
             campaign_id = self._interceptor._campaign_id
             llm_status = "enabled" if self._llm_hook_register else "disabled (no hook provided)"
             print(

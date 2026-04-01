@@ -1226,6 +1226,7 @@ class FlowceptAutoGenPlugin:
             global _PROV_STATS
             _PROV_STATS = self._stats
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+            self._campaign_id = self._interceptor._campaign_id
             self._started = True
             global _ACTIVE_INTERCEPTOR
             _ACTIVE_INTERCEPTOR = self._interceptor

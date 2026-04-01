@@ -1520,6 +1520,7 @@ class FlowceptAcademyPlugin:
         try:
             _PROV_STATS = _ProvenanceStats() if self._perf_tracking else None
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+            self._campaign_id = self._interceptor._campaign_id
             _ACTIVE_INTERCEPTOR = self._interceptor
             wf_id = self._interceptor._workflow_id
             _PERF_CSV_PATH = self._perf_csv or f"provenance_perf_{wf_id}.csv"

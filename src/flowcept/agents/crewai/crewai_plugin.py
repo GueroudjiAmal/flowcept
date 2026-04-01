@@ -1231,6 +1231,7 @@ class FlowceptCrewAIPlugin:
             global _PROV_STATS
             _PROV_STATS = self._stats
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+            self._campaign_id = self._interceptor._campaign_id
             listener_obj, _ = _build_listener_class(self._interceptor, self._stats)
             self._listener_obj = listener_obj
             self._hooks_obj = _FlowceptCrewAIHooks(self._interceptor, self._stats, listener_obj)

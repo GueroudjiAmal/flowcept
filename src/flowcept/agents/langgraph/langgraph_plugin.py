@@ -1263,17 +1263,27 @@ class FlowceptLangGraphPlugin:
             # Stop only the Academy plugin; it flushes the shared buffer.
             academy_plugin.stop()
         """
-        global _ACTIVE_INTERCEPTOR, _HANDLER_CLASS
-        interceptor = academy_plugin._interceptor
-        inst = cls(config=config, _shared_interceptor=interceptor)
-        inst._started = True  # mark as started before building handler
-        _ACTIVE_INTERCEPTOR = interceptor
-
+        global _ACTIVE_INTERCEPTOR, _HANDLER_CLASS, _PROV_STATS
+        # Inherit campaign_id from the academy plugin so all provenance is linked.
+        academy_interceptor = academy_plugin._interceptor
+        campaign_id = academy_interceptor._campaign_id
+        merged = dict(config or {})
+        merged["campaign_id"] = campaign_id
+        # Create a proper LangGraphInterceptor (not an AcademyInterceptor).
+        lg_interceptor = LangGraphInterceptor()
+        lg_interceptor.start(
+            merged.get("workflow_name", "langgraph-workflow"),
+            campaign_id=campaign_id,
+        )
+        inst = cls(config=merged, _shared_interceptor=lg_interceptor)
+        inst._interceptor = lg_interceptor
+        inst._owns_interceptor = True  # we own this interceptor — stop it on stop()
+        inst._started = True
+        inst._stats = _ProvenanceStats() if merged.get("performance_tracking", True) else None
         if _HANDLER_CLASS is None:
             _HANDLER_CLASS = _build_handler_class()
-        inst._stats = _ProvenanceStats() if (config or {}).get("performance_tracking", True) else None
-        inst._handler = _HANDLER_CLASS(interceptor, inst._stats)
-        global _PROV_STATS
+        inst._handler = _HANDLER_CLASS(lg_interceptor, inst._stats)
+        _ACTIVE_INTERCEPTOR = lg_interceptor
         _PROV_STATS = inst._stats
         return inst
 
@@ -1298,6 +1308,7 @@ class FlowceptLangGraphPlugin:
             self._stats = _ProvenanceStats() if self._perf_tracking else None
             _PROV_STATS = self._stats
             self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+            self._campaign_id = self._interceptor._campaign_id
 
             if _HANDLER_CLASS is None:
                 _HANDLER_CLASS = _build_handler_class()
@@ -1313,8 +1324,7 @@ class FlowceptLangGraphPlugin:
                 f"  workflow_id : {wf_id}\n"
                 f"  campaign_id : {campaign_id}\n"
                 f"  Capturing   : graph runs (sub-workflows), node execution "
-                f"(parent_task_id), LLM + tool calls (child tasks, telemetry).\n"
-                f"  Buffer → flowcept_buffer_{wf_id}.jsonl on stop.",
+                f"(parent_task_id), LLM + tool calls (child tasks, telemetry).",
                 flush=True,
             )
         except Exception as e:

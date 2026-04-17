@@ -99,8 +99,7 @@ agent:
   audio_enabled: false
   debug: true
 
-databases: {}
-
+databases:
   lmdb:
     enabled: true
     path: flowcept_lmdb
@@ -132,7 +131,7 @@ plugins:
   # All other keys are forwarded as the plugin's config dict.
 
   academy:
-    enabled: true
+    enabled: false
     kind: academy
     workflow_name: "academy-workflow"
     performance_tracking: true

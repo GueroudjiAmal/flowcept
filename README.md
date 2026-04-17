@@ -149,6 +149,9 @@ For an end-to-end workflow developer tutorial (default user guide), start with [
 - [Running with Containers](#running-with-containers)
 - [Examples](#examples)
 - [Agentic Provenance Plugins](#agentic-provenance-plugins)
+  - [Provenance record types per plugin](#provenance-record-types-per-plugin)
+  - [Cross-plugin composition](#cross-plugin-composition)
+  - [Cross-framework provenance linking](#cross-framework-provenance-linking)
 - [Data Persistence](#data-persistence)
 - [Performance Tuning](#performance-tuning-for-performance-evaluation)
 - [AMD GPU Setup](#install-amd-gpu-lib)
@@ -204,6 +207,7 @@ pip install flowcept[nvidia]        # NVIDIA GPU runtime capture
 pip install flowcept[telemetry]     # CPU/GPU/memory telemetry capture
 pip install flowcept[lmdb]          # LMDB lightweight database
 pip install flowcept[mqtt]          # MQTT support
+pip install flowcept[diaspora]      # Diaspora Stream API message queue
 pip install flowcept[llm_agent]     # MCP agent, LangChain, Streamlit integration: needed either for MCP capture or for the Flowcept Agent.
 pip install flowcept[llm_google]    # Google GenAI + Flowcept agent support
 pip install flowcept[analytics]     # Extra analytics (seaborn, plotly, scipy)
@@ -274,6 +278,7 @@ Supported MQs:
 - [Redis](https://redis.io) → **default**, lightweight, works on Linux, macOS, Windows, and HPC (tested on [Frontier](link) and [Summit](link))
 - [Kafka](https://kafka.apache.org) → for distributed environments or if Kafka is already in your stack
 - [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs
+- [Diaspora Stream API](https://github.com/diaspora-project/diaspora-stream-api) → file-backed streaming, suitable for HPC environments without network brokers
 
 ---
 
@@ -446,8 +451,83 @@ All four plugins export `openai_chat` and `anthropic_chat` from their respective
 | LLM calls (OpenAI) | ✓ | ✓ | ✓ | ✓ |
 | LLM calls (Anthropic) | ✓ | ✓ | ✓ | ✓ |
 | Token usage | ✓ | ✓ | ✓ | ✓ |
+| CPU / memory telemetry | ✓ | ✓ | — | — |
 | Agent ID on LLM calls | ✓ | ✓ | ✓ | ✓ |
 | Automatic agent wrapping | ✓ | ✓ | — | ✓ |
+
+### Provenance record types per plugin
+
+Each plugin emits typed `TaskObject` records tagged with a `subtype` field, forming a nested provenance hierarchy:
+
+| Plugin | Record subtypes and hierarchy |
+|---|---|
+| **Academy** | Campaign `WorkflowObject` → agent `WorkflowObject` → `academy_action` / `academy_loop` / `academy_lifecycle` (siblings) → `llm_call` (under action or loop) |
+| **LangGraph** | `WorkflowObject` → `langgraph_graph` → `langgraph_node` → `llm_call` / `tool_call` |
+| **CrewAI** | `WorkflowObject` → `crewai_crew` (no children via `parent_task_id`) · `crewai_task` → `crewai_agent` → `llm_call` / `tool_call` |
+| **AutoGen** | `WorkflowObject` → `autogen_run` → `autogen_message` → `llm_call` |
+
+All records carry `campaign_id`, `workflow_id`, `task_id`, `started_at`, `ended_at`, and `status`. `used` (inputs) and `generated` (outputs) are present on records that represent computation (`academy_action`, node/graph records, LLM and tool calls); `parent_task_id` links child records to their enclosing parent.
+
+### Cross-plugin composition
+
+All four plugins can run under a **shared `campaign_id`** using the `from_academy_plugin()` factory. AutoGen and CrewAI share the Academy plugin's in-memory buffer directly; LangGraph creates its own interceptor but inherits the same `campaign_id`:
+
+```python
+from flowcept.agents.academy.academy_plugin import FlowceptAcademyPlugin
+from flowcept.agents.langgraph.langgraph_plugin import FlowceptLangGraphPlugin
+from flowcept.agents.autogen.autogen_plugin import FlowceptAutoGenPlugin
+from flowcept.agents.crewai.crewai_plugin import FlowceptCrewAIPlugin
+
+ap = FlowceptAcademyPlugin(config={"workflow_name": "my-run"})
+ap.start()
+lg = FlowceptLangGraphPlugin.from_academy_plugin(ap)   # own interceptor, shared campaign_id
+ag = FlowceptAutoGenPlugin.from_academy_plugin(ap)     # shared buffer
+cr = FlowceptCrewAIPlugin.from_academy_plugin(ap)      # shared buffer
+
+# ... run workloads ...
+
+lg.stop()   # flush LangGraph's interceptor
+ap.stop()   # flush Academy / AutoGen / CrewAI shared buffer
+```
+
+Every record across all four plugins carries the same `campaign_id`, so a single query retrieves the full cross-framework provenance trace.
+
+### Cross-framework provenance linking
+
+When an Academy `@action` launches a LangGraph graph or an AutoGen team, the plugins can record an explicit parent–child edge across framework boundaries.
+
+**Academy (source side)** — two `contextvars.ContextVar` values are set automatically during execution:
+
+- `_current_academy_agent_id` — the Academy agent identifier, set once per agent at startup
+- `_current_action_task_id` — the Flowcept `task_id` of the currently-executing `@action` or `@loop`
+
+Read the latter inside an action to get the enclosing task's identifier:
+
+```python
+from flowcept.agents.academy.academy_plugin import _current_action_task_id
+action_task_id = _current_action_task_id.get()
+```
+
+**LangGraph (target side)** — pass the action's `task_id` as `_source_agent_id` in the initial graph state:
+
+```python
+result = await graph.ainvoke(
+    {"_source_agent_id": action_task_id, ...},
+    config={"callbacks": [lg.callback_handler]},
+)
+```
+
+The LangGraph plugin stores it as `source_agent_id` in `custom_metadata` of both `langgraph_graph` and `langgraph_node` records.
+
+**AutoGen (target side)** — pass it as `source_agent_id` to `run_team()`:
+
+```python
+result = await ag.run_team(team, task, source_agent_id=action_task_id)
+```
+
+The AutoGen plugin stores it in `custom_metadata` of the `autogen_run` record.
+
+In all cases, `campaign_id` and `workflow_id` alone are sufficient for coarse-grained cross-framework queries without explicit identifier threading.
 
 ### Examples
 
@@ -469,7 +549,7 @@ Runnable examples for each framework are in [`examples/agents/`](examples/agents
 | **Instrumentation and Decorators** | - [@flowcept](https://github.com/ORNL/flowcept/blob/main/examples/start_here.py): encapsulate a function (e.g., a main function) as a workflow. <br> - [@flowcept_task](https://github.com/ORNL/flowcept/blob/main/examples/instrumented_simple_example.py): encapsulate a function as a task. <br> - `@telemetry_flowcept_task`: same as `@flowcept_task`, but optimized for telemetry capture. <br> - `@lightweight_flowcept_task`: same as `@flowcept_task`, but very lightweight, optimized for HPC workloads <br> - [Loop](https://github.com/ORNL/flowcept/blob/main/examples/instrumented_loop_example.py) <br> - [PyTorch Model](https://github.com/ORNL/flowcept/blob/main/examples/llm_complex/llm_model.py) <br> - [MCP Agent](https://github.com/ORNL/flowcept/blob/main/examples/agents/aec_agent_mock.py) |
 | **Context Manager**                | `with Flowcept():` <br/> &nbsp;&nbsp;&nbsp;`# Workflow code` <br/><br/>Similar to the `@flowcept` decorator, but more flexible for instrumenting code blocks that aren’t encapsulated in a single function and for workflows with scattered code across multiple files.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **Custom Task Creation**           | `FlowceptTask(activity_id=<id>, used=<inputs>, generated=<outputs>, ...)` <br/><br/>Use for fully customizable task instrumentation. Publishes directly to the MQ either via context management (`with FlowceptTask(...)`) or by calling `send()`. It needs to have a `Flowcept().start()` first (or within a `with Flowcept()` context). See [example](examples/consumers/ping_pong_example.py).                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| **Message Queues (MQ)**            | - **Disabled** (offline mode: provenance events stay in an in-memory buffer, not accessible to external processes) <br> - [Redis](https://redis.io) → default, lightweight, easy to run anywhere <br> - [Kafka](https://kafka.apache.org) → for distributed, production setups <br> - [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs <br><br> _Setup example:_ [docker compose](https://github.com/ORNL/flowcept/blob/main/deployment/compose.yml)                                                                                                                                                                                                                                                                                                                                                      |
+| **Message Queues (MQ)**            | - **Disabled** (offline mode: provenance events stay in an in-memory buffer, not accessible to external processes) <br> - [Redis](https://redis.io) → default, lightweight, easy to run anywhere <br> - [Kafka](https://kafka.apache.org) → for distributed, production setups <br> - [Mofka](https://mofka.readthedocs.io) → optimized for HPC runs <br> - [Diaspora Stream API](https://github.com/diaspora-project/diaspora-stream-api) → file-backed streaming for HPC without network brokers (`pip install flowcept[diaspora]`) <br><br> _Setup example:_ [docker compose](https://github.com/ORNL/flowcept/blob/main/deployment/compose.yml)                                                                                                                                                                                                                                                                                                                                                      |
 | **Databases**                      | - **Disabled** → Flowcept runs in ephemeral mode (data only in MQ, no persistence) <br> - **[MongoDB](https://www.mongodb.com)** → default, rich queries and efficient bulk writes <br> - **[LMDB](https://lmdb.readthedocs.io)** → lightweight, file-based, no external service, basic query support                                                                                                                                                                                                                                                                                                                                                     |
 | **Querying and Monitoring**        | - **[Grafana](deployment/compose-grafana.yml)** → dashboarding via MongoDB connector <br> - **MCP Flowcept Agent** → LLM-based querying of provenance data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Agentic Provenance Plugins**     | [Academy](examples/agents/academy/academy_example.py), [LangGraph](examples/agents/langgraph/langgraph_example.py), [CrewAI](examples/agents/crewai/crewai_example.py), [AutoGen](examples/agents/autogen/autogen_example.py) — zero-code-change intra/inter-agent + LLM call provenance. Enable via `plugins:` in `settings.yaml`, wrap with `with Flowcept():`. See [combined example](examples/agents/combined_agentic_systems/combined_example.py). |

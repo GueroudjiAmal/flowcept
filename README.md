@@ -451,7 +451,6 @@ All four plugins export `openai_chat` and `anthropic_chat` from their respective
 | LLM calls (OpenAI) | ✓ | ✓ | ✓ | ✓ |
 | LLM calls (Anthropic) | ✓ | ✓ | ✓ | ✓ |
 | Token usage | ✓ | ✓ | ✓ | ✓ |
-| CPU / memory telemetry | ✓ | ✓ | — | — |
 | Agent ID on LLM calls | ✓ | ✓ | ✓ | ✓ |
 | Automatic agent wrapping | ✓ | ✓ | — | ✓ |
 

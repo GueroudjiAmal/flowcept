@@ -1538,6 +1538,7 @@ class FlowceptAcademyPlugin:
         cfg = config or {}
         self._enabled: bool = cfg.get("enabled", False)
         self._workflow_name: str = cfg.get("workflow_name", "academy-workflow")
+        self._workflow_id: str | None = cfg.get("workflow_id", None)
         self._campaign_id: str | None = cfg.get("campaign_id", None)
         self._perf_tracking: bool = cfg.get("performance_tracking", True)
         self._perf_csv: str | None = cfg.get("perf_csv", None)  # explicit override
@@ -1552,7 +1553,11 @@ class FlowceptAcademyPlugin:
         global _ACTIVE_INTERCEPTOR, _PROV_STATS, _PERF_CSV_PATH
         try:
             _PROV_STATS = _ProvenanceStats() if self._perf_tracking else None
-            self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+            if self._workflow_id is not None and self._campaign_id is not None:
+                self._interceptor.start_worker(self._workflow_id, self._campaign_id)
+            else:
+                self._interceptor.start(self._workflow_name, campaign_id=self._campaign_id)
+                self._workflow_id = self._interceptor._workflow_id
             self._campaign_id = self._interceptor._campaign_id
             _ACTIVE_INTERCEPTOR = self._interceptor
             wf_id = self._interceptor._workflow_id

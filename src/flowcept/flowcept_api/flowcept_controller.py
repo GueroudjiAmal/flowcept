@@ -293,6 +293,7 @@ class Flowcept(object):
             # Propagate Flowcept's campaign_id so all auto-started plugins share the same campaign.
             merged_cfg = dict(plugin_cfg)
             merged_cfg.setdefault("campaign_id", self.campaign_id)
+            merged_cfg.setdefault("workflow_id", self.current_workflow_id)
             try:
                 plugin = Flowcept._build_plugin(kind, merged_cfg)
                 plugin.start()

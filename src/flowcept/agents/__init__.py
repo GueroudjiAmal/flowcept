@@ -1,7 +1,10 @@
 # flake8: noqa: F403
 """Agents subpackage."""
 
-from flowcept.agents.tools.general_tools import *
-from flowcept.agents.tools.in_memory_queries.in_memory_queries_tools import *
-from flowcept.agents.tools.db_prov_tools import *
-from flowcept.agents.tools.workflow_query_tools import *
+try:
+    from flowcept.agents.tools.general_tools import *
+    from flowcept.agents.tools.in_memory_queries.in_memory_queries_tools import *
+    from flowcept.agents.tools.db_prov_tools import *
+    from flowcept.agents.tools.workflow_query_tools import *
+except ModuleNotFoundError:
+    pass

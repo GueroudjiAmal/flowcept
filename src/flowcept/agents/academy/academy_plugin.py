@@ -205,7 +205,7 @@ _current_action_task_id: contextvars.ContextVar[str | None] = contextvars.Contex
     "_current_action_task_id", default=None
 )
 
-# ContextVar: holds the real Academy agent ID (e.g. "AgentId<82278eb6>") for
+# ContextVar: holds the normalized Academy agent ID for
 # the agent whose coroutine is currently executing.  Set once per agent at
 # startup so every LLM call emitted from within that agent carries the right ID.
 _current_academy_agent_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -298,18 +298,29 @@ class AcademyInterceptor:
     def telemetry_capture(self):
         return self._interceptor.telemetry_capture if self._interceptor else None
 
-    def send_agent_workflow(self, agent_type: str, agent_id: str) -> str:
+    def send_agent_workflow(self, agent_type: str, agent_id: str, agent_name: str | None = None) -> str:
         """Emit a WorkflowObject for an agent sub-workflow; return its workflow_id."""
         if self._interceptor is None:
             return str(uuid.uuid4())
+        from flowcept.commons.flowcept_dataclasses.agent_object import AgentObject
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
+        name = agent_name or agent_id
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
-        wf.name = f"{agent_type}:{agent_id}"
+        wf.name = f"{agent_type}:{name}"
         wf.campaign_id = self._campaign_id
         wf.parent_workflow_id = self._workflow_id
-        wf.custom_metadata = {"agent_type": agent_type, "agent_id": agent_id}
+        wf.custom_metadata = {"agent_type": agent_type, "agent_id": agent_id, "agent_name": name}
         self._interceptor.send_workflow_message(wf)
+        agent = AgentObject(
+            agent_id=agent_id,
+            name=name,
+            workflow_id=wf.workflow_id,
+            campaign_id=self._campaign_id,
+        )
+        agent.extra_metadata = {"agent_type": agent_type}
+        self._interceptor.send_agent_message(agent)
         return wf.workflow_id
 
     def send_graph_workflow(self, graph_name: str, group_id: str) -> str:
@@ -649,7 +660,7 @@ def _install_runtime_patches() -> None:
         # already have stale context copies and will never see the agent ID.
         # Setting it first ensures every task spawned during startup inherits
         # the correct Academy agent ID automatically.
-        agent_type, agent_id = _agent_info(self)
+        agent_type, agent_id, agent_name = _agent_info(self)
         _current_academy_agent_id.set(agent_id)
 
         await _orig_start(self)
@@ -658,7 +669,7 @@ def _install_runtime_patches() -> None:
         if interceptor is None:
             return
         try:
-            sub_wf_id = interceptor.send_agent_workflow(agent_type, agent_id)
+            sub_wf_id = interceptor.send_agent_workflow(agent_type, agent_id, agent_name)
             _AGENT_WORKFLOWS[agent_id] = sub_wf_id
             _AGENT_ID_TO_TYPE[agent_id] = agent_type
             _emit_lifecycle(interceptor, self, "agent_startup")
@@ -696,16 +707,33 @@ def _uninstall_runtime_patches() -> None:
 # Emit helpers
 # ---------------------------------------------------------------------------
 
-def _agent_info(runtime: Any) -> tuple[str, str]:
+def _agent_id_parts(agent_id_obj: Any) -> tuple[str, str | None]:
+    try:
+        agent_id = str(agent_id_obj.uid)
+    except Exception:
+        raw_agent_id = str(agent_id_obj)
+        if raw_agent_id.startswith("AgentId<") and raw_agent_id.endswith(">"):
+            agent_id = raw_agent_id[len("AgentId<") : -1]
+        else:
+            agent_id = raw_agent_id
+    try:
+        agent_name = str(agent_id_obj.name)
+    except Exception:
+        agent_name = None
+    return agent_id, agent_name
+
+
+def _agent_info(runtime: Any) -> tuple[str, str, str | None]:
     try:
         agent_type = type(runtime.agent).__name__
     except Exception:
         agent_type = "unknown"
     try:
-        agent_id = str(runtime.agent_id)
+        agent_id, agent_name = _agent_id_parts(runtime.agent_id)
     except Exception:
         agent_id = "unknown"
-    return agent_type, agent_id
+        agent_name = None
+    return agent_type, agent_id, agent_name
 
 
 def _agent_workflow_id(agent_id: str, fallback: str | None) -> str | None:
@@ -721,10 +749,11 @@ def _parse_source(source_id: Any) -> tuple[str | None, str | None, str | None]:
       - AgentId<hex> → another agent; look up its sub-workflow
     Returns (source_str, source_agent_id, source_workflow_id).
     """
+    source_agent_id, _ = _agent_id_parts(source_id)
     s = str(source_id)
     if s.startswith("AgentId"):
-        wf_id = _AGENT_WORKFLOWS.get(s)
-        return s, s, wf_id
+        wf_id = _AGENT_WORKFLOWS.get(source_agent_id)
+        return s, source_agent_id, wf_id
     return s, None, None
 
 
@@ -753,11 +782,12 @@ def _emit_action(
     tel_end: Any,
 ) -> None:
     with _timed("action_emit"):
-        agent_type, agent_id = _agent_info(runtime)
+        agent_type, agent_id, agent_name = _agent_info(runtime)
         source_str, source_agent_id, source_workflow_id = _parse_source(source_id)
 
         custom: dict[str, Any] = {
             "agent_type": agent_type,
+            "agent_name": agent_name,
             "source_id": source_str,
             # Always record whether this was a cross-agent call
             "cross_agent_call": source_agent_id is not None,
@@ -782,6 +812,8 @@ def _emit_action(
             "generated": _safe_clip(result) if error is None else None,
             "stderr": str(error) if error else None,
         }
+        if source_agent_id is not None:
+            task["source_agent_id"] = source_agent_id
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         if tel_end is not None:
@@ -801,7 +833,7 @@ def _emit_loop_event(
     error: BaseException | None = None,
 ) -> None:
     with _timed("loop_emit"):
-        agent_type, agent_id = _agent_info(runtime)
+        agent_type, agent_id, agent_name = _agent_info(runtime)
         task: dict[str, Any] = {
             "task_id": task_id,
             "subtype": "academy_loop",
@@ -810,6 +842,7 @@ def _emit_loop_event(
             "agent_id": agent_id,
             "custom_metadata": {
                 "agent_type": agent_type,
+                "agent_name": agent_name,
                 "loop_event": event,
             },
             "started_at": started_at,
@@ -827,13 +860,13 @@ def _emit_lifecycle(
     interceptor: AcademyInterceptor, runtime: Any, event: str
 ) -> None:
     with _timed("lifecycle_emit"):
-        agent_type, agent_id = _agent_info(runtime)
+        agent_type, agent_id, agent_name = _agent_info(runtime)
         now = time.time()
         task: dict[str, Any] = {
             "subtype": "academy_lifecycle",
             "activity_id": event,
             "agent_id": agent_id,
-            "custom_metadata": {"agent_type": agent_type},
+            "custom_metadata": {"agent_type": agent_type, "agent_name": agent_name},
             "started_at": now,
             "ended_at": now,
             "status": "FINISHED",

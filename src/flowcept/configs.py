@@ -50,7 +50,7 @@ if USE_DEFAULT:
     SETTINGS_PATH = "FLOWCEPT_DEFAULT_SETTINGS"
 
 else:
-    from omegaconf import OmegaConf
+    from omegaconf import DictConfig, ListConfig, OmegaConf
 
     _SETTINGS_DIR = os.path.expanduser(f"~/.{PROJECT_NAME}")
     SETTINGS_PATH = os.getenv("FLOWCEPT_SETTINGS_PATH", f"{_SETTINGS_DIR}/settings.yaml")
@@ -289,7 +289,10 @@ if USE_DEFAULT:
     PLUGINS = dict(settings.get("plugins", {}))
 else:
     _plugins_raw = settings.get("plugins", {})
-    PLUGINS = OmegaConf.to_container(_plugins_raw, resolve=True) if _plugins_raw else {}
+    if isinstance(_plugins_raw, (DictConfig, ListConfig)):
+        PLUGINS = OmegaConf.to_container(_plugins_raw, resolve=True)
+    else:
+        PLUGINS = dict(_plugins_raw) if _plugins_raw else {}
 
 ####################
 # Enabled ADAPTERS #

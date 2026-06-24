@@ -1,6 +1,7 @@
 """DB API module."""
 
 import uuid
+from datetime import datetime
 from typing import List, Dict
 
 from flowcept.commons.daos.docdb_dao.docdb_dao_base import DocumentDBDAO
@@ -9,6 +10,7 @@ from flowcept.commons.flowcept_dataclasses.workflow_object import (
 )
 from flowcept.commons.flowcept_dataclasses.task_object import TaskObject
 from flowcept.commons.flowcept_dataclasses.blob_object import BlobObject
+from flowcept.commons.flowcept_dataclasses.agent_object import AgentObject
 from flowcept.commons.flowcept_logger import FlowceptLogger
 
 
@@ -21,6 +23,45 @@ class DBAPI(object):
     # TODO: consider making all methods static
     def __init__(self):
         self.logger = FlowceptLogger()
+
+    @staticmethod
+    def _to_message_value(value):
+        """Convert object metadata values to MQ-safe values."""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, bytes):
+            return None
+        if isinstance(value, dict):
+            return {str(k): DBAPI._to_message_value(v) for k, v in value.items() if k not in {"data", "_id"}}
+        if isinstance(value, list):
+            return [DBAPI._to_message_value(v) for v in value]
+        if isinstance(value, tuple):
+            return [DBAPI._to_message_value(v) for v in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
+    def _emit_object_metadata_message(self, object_id):
+        """Emit metadata-only object provenance to the active Flowcept buffer."""
+        try:
+            dao = DBAPI._dao()
+            if hasattr(dao, "get_blob_object_metadata_doc"):
+                doc = dao.get_blob_object_metadata_doc(object_id=object_id)
+            else:
+                doc = self.get_blob_object(object_id=object_id).to_dict()
+            if "data" in doc:
+                doc["storage_type"] = "in_object"
+            elif "grid_fs_file_id" in doc:
+                doc["storage_type"] = "gridfs"
+            msg = DBAPI._to_message_value(doc)
+            msg.pop("_id", None)
+            msg.pop("data", None)
+            msg["type"] = "object"
+            from flowcept.flowcept_api.flowcept_controller import Flowcept
+
+            Flowcept.emit_message(msg)
+        except Exception as e:
+            self.logger.error(f"Could not emit object metadata message for object_id={object_id}: {e}")
 
     @classmethod
     def _dao(cls) -> DocumentDBDAO:
@@ -69,6 +110,27 @@ class DBAPI(object):
         else:
             return workflow_obj
 
+    def insert_or_update_agent(self, agent_obj: AgentObject) -> AgentObject:
+        """Insert or update an agent document.
+
+        Parameters
+        ----------
+        agent_obj : AgentObject
+            Agent object to persist.
+
+        Returns
+        -------
+        AgentObject or None
+            The persisted agent object, or ``None`` on failure.
+        """
+        self.logger.debug(f"DB API going to save agent {agent_obj}")
+        ret = DBAPI._dao().insert_or_update_agent(agent_obj)
+        if not ret:
+            self.logger.error("Sorry, couldn't update or insert agent.")
+            return None
+        else:
+            return agent_obj
+
     def get_workflow_object(self, workflow_id) -> WorkflowObject:
         """Get a workflow object by workflow identifier.
 
@@ -83,8 +145,10 @@ class DBAPI(object):
             Matching workflow object, or ``None`` when not found.
         """
         wfobs = self.workflow_query(filter={WorkflowObject.workflow_id_field(): workflow_id})
-        if wfobs is None or len(wfobs) == 0:
+        if wfobs is None:
             self.logger.error("Could not retrieve workflow with that filter.")
+            return None
+        elif len(wfobs) == 0:
             return None
         else:
             return WorkflowObject.from_dict(wfobs[0])
@@ -107,6 +171,67 @@ class DBAPI(object):
             self.logger.error("Could not retrieve workflows with that filter.")
             return None
         return results
+
+    def get_agent_object(self, agent_id) -> AgentObject:
+        """Get an agent object by agent identifier.
+
+        Parameters
+        ----------
+        agent_id : str
+            Agent identifier.
+
+        Returns
+        -------
+        AgentObject or None
+            Matching agent object, or ``None`` when not found.
+        """
+        agobs = self.agent_query(filter={AgentObject.agent_id_field(): agent_id})
+        if agobs is None:
+            self.logger.error("Could not retrieve agent with that filter.")
+            return None
+        elif len(agobs) == 0:
+            return None
+        else:
+            return AgentObject.from_dict(agobs[0])
+
+    def agent_query(self, filter) -> List[Dict]:
+        """Query the ``agents`` collection.
+
+        Parameters
+        ----------
+        filter : dict
+            Mongo/DAO filter expression.
+
+        Returns
+        -------
+        list of dict or None
+            Matching agent records, or ``None`` on error.
+        """
+        results = self.query(collection="agents", filter=filter)
+        if results is None:
+            self.logger.error("Could not retrieve agents with that filter.")
+            return None
+        return results
+
+    def delete_agents_with_filter(self, filter) -> bool:
+        """Delete agents matching the filter.
+
+        Parameters
+        ----------
+        filter : dict
+            DAO filter expression.
+
+        Returns
+        -------
+        bool
+            True if successful, False otherwise.
+        """
+        dao = DBAPI._dao()
+        try:
+            return dao.delete_agents_with_filter(filter)
+        except Exception as e:
+            self.logger.error(f"Could not delete agents with filter {filter}: {e}")
+            return False
 
     def get_tasks_from_current_workflow(self):
         """Get tasks belonging to ``Flowcept.current_workflow_id``.
@@ -215,7 +340,6 @@ class DBAPI(object):
             obj_doc = None if objs is None or len(objs) == 0 else objs[0]
 
         if obj_doc is None:
-            self.logger.error("Could not retrieve blob object with that filter.")
             return None
         return BlobObject.from_dict(obj_doc)
 
@@ -518,7 +642,7 @@ class DBAPI(object):
         object_id=None,
         task_id=None,
         workflow_id=None,
-        type=None,
+        object_type=None,
         custom_metadata=None,
         save_data_in_collection=False,
         pickle=False,
@@ -537,7 +661,7 @@ class DBAPI(object):
             Associated task identifier.
         workflow_id : str, optional
             Associated workflow identifier. Defaults to current workflow when available.
-        type : str, optional
+        object_type : str, optional
             User-defined object category.
         custom_metadata : dict, optional
             Arbitrary metadata attached to the object.
@@ -563,25 +687,27 @@ class DBAPI(object):
                 workflow_id = Flowcept.current_workflow_id
             except Exception:
                 workflow_id = None
-        return DBAPI._dao().save_or_update_object(
+        object_id = DBAPI._dao().save_or_update_object(
             object,
             object_id,
             task_id,
             workflow_id,
-            type,
+            object_type,
             custom_metadata,
             save_data_in_collection=save_data_in_collection,
             pickle_=pickle,
             control_version=control_version,
             tags=tags,
         )
+        self._emit_object_metadata_message(object_id)
+        return object_id
 
     def update_object_metadata(
         self,
         object_id,
         custom_metadata=None,
         tags=None,
-        type=None,
+        object_type=None,
         task_id=None,
         workflow_id=None,
         control_version=True,
@@ -596,7 +722,7 @@ class DBAPI(object):
             Metadata dictionary to set.
         tags : list of str, optional
             Tags to set.
-        type : str, optional
+        object_type : str, optional
             Object type/category to set.
         task_id : str, optional
             Task identifier to set.
@@ -610,15 +736,17 @@ class DBAPI(object):
         str
             Updated object identifier.
         """
-        return DBAPI._dao().update_object_metadata(
+        updated_object_id = DBAPI._dao().update_object_metadata(
             object_id=object_id,
             custom_metadata=custom_metadata,
             tags=tags,
-            type=type,
+            object_type=object_type,
             task_id=task_id,
             workflow_id=workflow_id,
             control_version=control_version,
         )
+        self._emit_object_metadata_message(updated_object_id)
+        return updated_object_id
 
     def to_df(self, collection="tasks", filter=None):
         """Query a collection and return a pandas DataFrame.
@@ -668,10 +796,13 @@ class DBAPI(object):
 
         Returns
         -------
-        list of dict or None
-            Query results from the backend DAO.
+        list of dict
+            Query results from the backend DAO; empty list when nothing matches or on error.
         """
-        return DBAPI._dao().query(filter, projection, limit, sort, aggregation, remove_json_unserializables, collection)
+        result = DBAPI._dao().query(
+            filter, projection, limit, sort, aggregation, remove_json_unserializables, collection
+        )
+        return result or []
 
     def save_or_update_ml_model(
         self,
@@ -679,7 +810,7 @@ class DBAPI(object):
         object_id=None,
         task_id=None,
         workflow_id=None,
-        type="ml_model",
+        object_type="ml_model",
         custom_metadata=None,
         save_data_in_collection=False,
         pickle=False,
@@ -698,7 +829,7 @@ class DBAPI(object):
             Associated task identifier.
         workflow_id : str, optional
             Associated workflow identifier.
-        type : str, optional
+        object_type : str, optional
             Category label. Defaults to ``"ml_model"``.
         custom_metadata : dict, optional
             Custom metadata.
@@ -721,7 +852,7 @@ class DBAPI(object):
             object_id=object_id,
             task_id=task_id,
             workflow_id=workflow_id,
-            type=type,
+            object_type=object_type,
             custom_metadata=custom_metadata,
             save_data_in_collection=save_data_in_collection,
             pickle=pickle,
@@ -735,7 +866,7 @@ class DBAPI(object):
         object_id=None,
         task_id=None,
         workflow_id=None,
-        type="dataset",
+        object_type="dataset",
         custom_metadata=None,
         save_data_in_collection=False,
         pickle=False,
@@ -754,7 +885,7 @@ class DBAPI(object):
             Associated task identifier.
         workflow_id : str, optional
             Associated workflow identifier.
-        type : str, optional
+        object_type : str, optional
             Category label. Defaults to ``"dataset"``.
         custom_metadata : dict, optional
             Custom metadata.
@@ -777,7 +908,7 @@ class DBAPI(object):
             object_id=object_id,
             task_id=task_id,
             workflow_id=workflow_id,
-            type=type,
+            object_type=object_type,
             custom_metadata=custom_metadata,
             save_data_in_collection=save_data_in_collection,
             pickle=pickle,
@@ -847,7 +978,7 @@ class DBAPI(object):
         obj_id = self.save_or_update_object(
             object=binary_data,
             object_id=object_id,
-            type="ml_model",
+            object_type="ml_model",
             task_id=task_id,
             workflow_id=workflow_id,
             custom_metadata=cm,
@@ -894,3 +1025,45 @@ class DBAPI(object):
         model._flowcept_model_object = {k: v for k, v in doc.items() if k != "data"}
 
         return doc
+
+    def save_node_positions(self, workflow_id: str, graph_type: str, positions: dict) -> bool:
+        """Save node positions for a workflow graph type.
+
+        Parameters
+        ----------
+        workflow_id : str
+            Workflow identifier.
+        graph_type : str
+            Graph type: 'dataflow', 'task', or 'activity'.
+        positions : dict
+            Dict mapping node IDs to coordinates.
+
+        Returns
+        -------
+        bool
+            True on success, False otherwise.
+        """
+        dao = DBAPI._dao()
+        if hasattr(dao, "save_node_positions"):
+            return dao.save_node_positions(workflow_id, graph_type, positions)
+        return False
+
+    def get_node_positions(self, workflow_id: str, graph_type: str) -> dict:
+        """Get node positions for a workflow graph type.
+
+        Parameters
+        ----------
+        workflow_id : str
+            Workflow identifier.
+        graph_type : str
+            Graph type.
+
+        Returns
+        -------
+        dict
+            Dict mapping node IDs to coordinates.
+        """
+        dao = DBAPI._dao()
+        if hasattr(dao, "get_node_positions"):
+            return dao.get_node_positions(workflow_id, graph_type)
+        return {}

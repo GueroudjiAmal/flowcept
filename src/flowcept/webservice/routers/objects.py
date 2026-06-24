@@ -44,7 +44,7 @@ def list_objects(
     object_id: str | None = None,
     workflow_id: str | None = None,
     task_id: str | None = None,
-    type: str | None = None,
+    object_type: str | None = None,
     filter_json: str | None = None,
     include_data: bool = False,
     db: DBAPI = Depends(get_db_api),
@@ -57,8 +57,8 @@ def list_objects(
         query_filter["workflow_id"] = workflow_id
     if task_id is not None:
         query_filter["task_id"] = task_id
-    if type is not None:
-        query_filter["type"] = type
+    if object_type is not None:
+        query_filter["object_type"] = object_type
 
     docs = db.blob_object_query(filter=query_filter) or []
     docs = sort_docs_by_first_date_field(docs, ["created_at", "updated_at", "utc_timestamp", "timestamp"])
@@ -151,6 +151,18 @@ def get_object_history(
     history = history[:limit]
     normalized = normalize_docs(history)
     return ListResponse(items=normalized, count=len(normalized), limit=limit)
+
+
+@router.delete("/{object_id}", response_model=Dict[str, Any])
+def delete_object(object_id: str, db: DBAPI = Depends(get_db_api)) -> Dict[str, Any]:
+    """Delete an object and all its versions by object_id."""
+    dao = DBAPI._dao()
+    if not hasattr(dao, "delete_object_keys"):
+        raise HTTPException(status_code=501, detail="Delete not supported by this DB backend.")
+    deleted = dao.delete_object_keys("object_id", [object_id])
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Object not found or could not be deleted: {object_id}")
+    return {"deleted": True, "object_id": object_id}
 
 
 @router.post("/query", response_model=ListResponse)

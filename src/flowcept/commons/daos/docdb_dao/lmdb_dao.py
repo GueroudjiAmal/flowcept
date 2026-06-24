@@ -10,7 +10,7 @@ import lmdb
 import json
 import pandas as pd
 
-from flowcept import WorkflowObject
+from flowcept import WorkflowObject, AgentObject
 from flowcept.commons.daos.docdb_dao.docdb_dao_base import DocumentDBDAO
 from flowcept.commons.flowcept_logger import FlowceptLogger
 from flowcept.configs import PERF_LOG, LMDB_SETTINGS
@@ -23,18 +23,39 @@ class LMDBDAO(DocumentDBDAO):
     Provides methods for storing and retrieving task and workflow data.
     """
 
+    _shared_handles = {}
+
     def __init__(self):
-        # TODO: if we are inheriting from DocumentDBDAO, shouldn't we call super() here?
-        self._initialized = True
+        # Avoid reopening LMDB for every DAO instance: lmdb can reject
+        # opening the same environment path more than once per process.
+        self._initialized = False
+        self._path = None
         self._open()
+        self._initialized = True
         self.logger = FlowceptLogger()
 
     def _open(self):
         """Open LMDB environment and databases."""
-        _path = LMDB_SETTINGS.get("path", "flowcept_lmdb")
-        self._env = lmdb.open(_path, map_size=10**12, max_dbs=2)
-        self._tasks_db = self._env.open_db(b"tasks")
-        self._workflows_db = self._env.open_db(b"workflows")
+        path = LMDB_SETTINGS.get("path", "flowcept_lmdb")
+        handle = LMDBDAO._shared_handles.get(path)
+        if handle is None:
+            env = lmdb.open(path, map_size=10**12, max_dbs=4)
+            handle = {
+                "env": env,
+                "tasks_db": env.open_db(b"tasks"),
+                "workflows_db": env.open_db(b"workflows"),
+                "agents_db": env.open_db(b"agents"),
+                "ref_count": 0,
+            }
+            LMDBDAO._shared_handles[path] = handle
+
+        handle["ref_count"] += 1
+        self._path = path
+        self._env = handle["env"]
+        self._tasks_db = handle["tasks_db"]
+        self._workflows_db = handle["workflows_db"]
+        self._agents_db = handle["agents_db"]
+        self._initialized = True
         self._is_closed = False
 
     def insert_and_update_many_tasks(self, docs: List[Dict], indexing_key=None):
@@ -115,6 +136,30 @@ class LMDBDAO(DocumentDBDAO):
             self.logger.exception(e)
             return False
 
+    def insert_or_update_agent(self, agent_obj: AgentObject):
+        """Insert or update an agent document.
+
+        Parameters
+        ----------
+        agent_obj : AgentObject
+            Agent object to insert or update.
+
+        Returns
+        -------
+        bool
+            True if the operation succeeds, False otherwise.
+        """
+        try:
+            _dict = agent_obj.to_dict()
+            with self._env.begin(write=True, db=self._agents_db) as txn:
+                key = _dict.get("agent_id").encode()
+                value = json.dumps(_dict).encode()
+                txn.put(key, value)
+            return True
+        except Exception as e:
+            self.logger.exception(e)
+            return False
+
     def delete_task_keys(self, key_name, keys_list: List[str]) -> bool:
         """Delete task documents by a key value list.
 
@@ -143,12 +188,29 @@ class LMDBDAO(DocumentDBDAO):
             self.logger.exception(e)
             return False
 
+    def delete_agents_with_filter(self, filter) -> bool:
+        """Delete agent documents that match the specified filter."""
+        if self._is_closed:
+            self._open()
+        try:
+            with self._env.begin(write=True, db=self._agents_db) as txn:
+                cursor = txn.cursor()
+                for key, value in cursor:
+                    entry = json.loads(value.decode())
+                    if LMDBDAO._match_filter(entry, filter):
+                        cursor.delete()
+            return True
+        except Exception as e:
+            self.logger.exception(e)
+            return False
+
     def count_tasks(self) -> int:
         """Count number of docs in tasks collection."""
         if self._is_closed:
             self._open()
         try:
-            return self._env.stat(db=self._tasks_db).get("entries", 0)
+            with self._env.begin(db=self._tasks_db) as txn:
+                return txn.stat().get("entries", 0)
         except Exception as e:
             self.logger.exception(e)
             return -1
@@ -158,7 +220,8 @@ class LMDBDAO(DocumentDBDAO):
         if self._is_closed:
             self._open()
         try:
-            return self._env.stat(db=self._workflows_db).get("entries", 0)
+            with self._env.begin(db=self._workflows_db) as txn:
+                return txn.stat().get("entries", 0)
         except Exception as e:
             self.logger.exception(e)
             return -1
@@ -184,8 +247,45 @@ class LMDBDAO(DocumentDBDAO):
             return True
 
         for key, value in filter.items():
-            if entry.get(key) != value:
-                return False
+            if key == "$or":
+                if not isinstance(value, list) or not any(LMDBDAO._match_filter(entry, clause) for clause in value):
+                    return False
+            elif key == "$and":
+                if not isinstance(value, list) or not all(LMDBDAO._match_filter(entry, clause) for clause in value):
+                    return False
+            elif isinstance(value, dict):
+                entry_val = entry.get(key)
+                for op, op_val in value.items():
+                    if op == "$in":
+                        if not isinstance(op_val, (list, set, tuple)) or entry_val not in op_val:
+                            return False
+                    elif op == "$nin":
+                        if not isinstance(op_val, (list, set, tuple)) or entry_val in op_val:
+                            return False
+                    elif op == "$eq":
+                        if entry_val != op_val:
+                            return False
+                    elif op == "$ne":
+                        if entry_val == op_val:
+                            return False
+                    elif op == "$gt":
+                        if entry_val is None or entry_val <= op_val:
+                            return False
+                    elif op == "$gte":
+                        if entry_val is None or entry_val < op_val:
+                            return False
+                    elif op == "$lt":
+                        if entry_val is None or entry_val >= op_val:
+                            return False
+                    elif op == "$lte":
+                        if entry_val is None or entry_val > op_val:
+                            return False
+                    else:
+                        if entry_val != value:
+                            return False
+            else:
+                if entry.get(key) != value:
+                    return False
         return True
 
     def to_df(self, collection="tasks", filter=None) -> pd.DataFrame:
@@ -200,7 +300,7 @@ class LMDBDAO(DocumentDBDAO):
         -------
          pd.DataFrame: A DataFrame containing the filtered data.
         """
-        docs = self.query(collection, filter)
+        docs = self.query(collection=collection, filter=filter)
         return pd.DataFrame(docs)
 
     def query(
@@ -244,9 +344,11 @@ class LMDBDAO(DocumentDBDAO):
             _db = self._tasks_db
         elif collection == "workflows":
             _db = self._workflows_db
+        elif collection == "agents":
+            _db = self._agents_db
         else:
-            msg = "Only tasks and workflows "
-            raise Exception(msg + "collections are currently available for this.")
+            self.logger.warning(f"LMDB does not support collection '{collection}'. Returning None.")
+            return None
 
         try:
             data = []
@@ -343,12 +445,38 @@ class LMDBDAO(DocumentDBDAO):
             remove_json_unserializables=remove_json_unserializables,
         )
 
+    def agent_query(
+        self,
+        filter=None,
+        projection=None,
+        limit=None,
+        sort=None,
+        aggregation=None,
+        remove_json_unserializables=None,
+    ):
+        """Query agents collection in the LMDB database."""
+        return self.query(
+            collection="agents",
+            filter=filter,
+            projection=projection,
+            limit=limit,
+            sort=sort,
+            aggregation=aggregation,
+            remove_json_unserializables=remove_json_unserializables,
+        )
+
     def close(self):
         """Close lmdb."""
         if getattr(self, "_initialized"):
             super().close()
             setattr(self, "_initialized", False)
-            self._env.close()
+            path = self._path
+            handle = LMDBDAO._shared_handles.get(path)
+            if handle is not None:
+                handle["ref_count"] -= 1
+                if handle["ref_count"] <= 0:
+                    handle["env"].close()
+                    LMDBDAO._shared_handles.pop(path, None)
             self._is_closed = True
 
     def object_query(self, filter):
@@ -364,8 +492,29 @@ class LMDBDAO(DocumentDBDAO):
         raise NotImplementedError
 
     def dump_to_file(self, collection, filter, output_file, export_format, should_zip):
-        """Dump data to file."""
-        raise NotImplementedError
+        """Dump collection data to a CSV or Parquet file, optionally zipped."""
+        import os
+        import zipfile
+        from datetime import datetime
+
+        df = self.to_df(collection, filter)
+
+        if output_file is None:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"{collection}_{ts}.{export_format}"
+
+        if export_format == "csv":
+            df.to_csv(output_file, index=False)
+        elif export_format == "parquet":
+            df.to_parquet(output_file, index=False)
+        else:
+            raise ValueError(f"Unsupported format '{export_format}'. Use 'csv' or 'parquet'.")
+
+        if should_zip:
+            zip_path = output_file + ".zip"
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(output_file, arcname=os.path.basename(output_file))
+            os.remove(output_file)
 
     def save_or_update_object(
         self,
@@ -373,7 +522,7 @@ class LMDBDAO(DocumentDBDAO):
         object_id,
         task_id,
         workflow_id,
-        type,
+        object_type,
         custom_metadata,
         save_data_in_collection,
         pickle_,
@@ -388,7 +537,7 @@ class LMDBDAO(DocumentDBDAO):
         object_id,
         custom_metadata=None,
         tags=None,
-        type=None,
+        object_type=None,
         task_id=None,
         workflow_id=None,
         control_version=True,

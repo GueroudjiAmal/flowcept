@@ -45,7 +45,7 @@ Then inspect `flowcept_buffer.jsonl`.
     - [Internal-LLM mode](#internal-llm-mode)
   - [Grafana monitoring](#grafana-monitoring)
 - [4) Provenance reports](#4-provenance-reports)
-  - [Provenance cards (markdown)](#provenance-cards-markdown)
+  - [Workflow cards (markdown)](#workflow-cards-markdown)
   - [Full reports (pdf)](#full-reports-pdf)
 - [5) Architecture](#5-architecture)
 
@@ -63,6 +63,13 @@ Generate settings:
 flowcept --init-settings
 ```
 
+Full file vs runtime mode:
+
+```bash
+flowcept --init-settings --full -y
+flowcept --config-profile full-online -y
+```
+
 Important: `settings.yaml` is the single source of truth for Flowcept runtime behavior.
 
 - default path: `~/.flowcept/settings.yaml`
@@ -77,7 +84,10 @@ Quick config profiles (recommended):
 
 ```bash
 flowcept --config-profile full-online
+flowcept --config-profile full-telemetry
+flowcept --config-profile mq-only
 flowcept --config-profile full-offline
+flowcept --config-profile mq-only-no-flush
 ```
 
 What this does:
@@ -100,6 +110,13 @@ Current profile behavior:
   - `kv_db.enabled: true`
   - `databases.mongodb.enabled: true`
   - `databases.lmdb.enabled: false`
+- `mq-only`:
+  - `project.db_flush_mode: online`
+  - `mq.enabled: true`
+  - `kv_db.enabled: false`
+  - `databases.mongodb.enabled: false`
+  - `databases.lmdb.enabled: false`
+  - Use `Flowcept(check_safe_stops=False)` with this profile.
 - `full-offline`:
   - `project.db_flush_mode: offline`
   - `project.dump_buffer.enabled: true`
@@ -107,6 +124,27 @@ Current profile behavior:
   - `kv_db.enabled: false`
   - `databases.mongodb.enabled: false`
   - `databases.lmdb.enabled: false`
+- `mq-only-no-flush`:
+  - `project.db_flush_mode: offline`
+  - `project.dump_buffer.enabled: true`
+  - `mq.enabled: true`
+  - `kv_db.enabled: false`
+  - `databases.mongodb.enabled: false`
+  - `databases.lmdb.enabled: false`
+  - Tasks accumulate locally and are bulk-published to MQ in a single end-of-run flush. Also dumps to local JSONL. Use `Flowcept(check_safe_stops=False)`.
+- `full-telemetry`:
+  - enables CPU, per-CPU, process, memory, disk, network, machine telemetry
+  - keeps `telemetry_capture.gpu: null`
+
+Adapter setup is additive:
+
+```bash
+flowcept --init-settings --dask -y
+flowcept --init-settings --mlflow -y
+flowcept --init-settings --tensorboard -y
+```
+
+These commands add `adapters.<name>` to the current settings file.
 
 ## 2) Capture provenance
 
@@ -229,7 +267,7 @@ Agentic provenance / MCP:
 
 - docs: https://flowcept.readthedocs.io/en/latest/agent.html
 - agent readme: `src/flowcept/agents/README.md`
-- skills contract: `src/flowcept/agents/SKILLS.md`
+- code-assistant routing: `AGENTS.md`
 - agent tests: `tests/agent/agent_tests.py`
 - PROV-AGENT paper: https://arxiv.org/abs/2508.02866
 
@@ -403,11 +441,7 @@ agent:
   mcp_port: 8000
 ```
 
-3. In your assistant session, load:
-
-- `src/flowcept/agents/SKILLS.md`
-
-Recommended flow: clone this repo and ask your assistant to read that file.
+3. In your assistant session, read `AGENTS.md`, then follow `docs/agent.rst` and `src/flowcept/agents/README.md`.
 
 #### Internal-LLM mode
 
@@ -449,12 +483,15 @@ Telemetry docs:
 
 ## 4) Provenance reports
 
-### Provenance cards (markdown)
+### Workflow cards (markdown)
 
 Default report mode:
 
-- `report_type="provenance_card"`
+- `report_type="workflow_card"`
 - `format="markdown"`
+
+The rendered workflow card follows the upstream Workflow Card template:
+https://github.com/data-cards/workflow-provenance-card.
 
 Python API:
 
@@ -462,10 +499,10 @@ Python API:
 from flowcept import Flowcept
 
 Flowcept.generate_report(
-    report_type="provenance_card",
+    report_type="workflow_card",
     format="markdown",
     workflow_id="<workflow_id>",
-    output_path="PROVENANCE_CARD.md",
+    output_path="WORKFLOW_CARD.md",
 )
 ```
 
@@ -473,7 +510,7 @@ REST download:
 
 ```bash
 curl -s -X POST \
-  http://127.0.0.1:8008/api/v1/workflows/<workflow_id>/reports/provenance-card/download
+  http://127.0.0.1:8008/api/v1/workflows/<workflow_id>/reports/workflow-card/download
 ```
 
 Docs:
@@ -525,8 +562,11 @@ Read more:
   - Fix: ensure `project.db_flush_mode: offline` and `project.dump_buffer.enabled: true` in settings
 - Symptom: `ValueError` about `db_flush_mode` vs MQ/DB settings
   - Fix: keep config consistent:
-    - Offline mode: disable MQ/KV/DBs
-    - Online mode: enable MQ + KV, and optionally DBs
+    - Offline mode (no MQ/KV/DBs): `flowcept --config-profile full-offline -y`
+    - Offline mode with end-of-run MQ flush: `flowcept --config-profile mq-only-no-flush -y`
+    - Online mode: `flowcept --config-profile full-online -y` or `flowcept --config-profile mq-only -y`
+- Symptom: `ValueError` about `check_safe_stops=True` requiring KV while MQ is enabled
+  - Fix: either use `flowcept --config-profile full-online -y`, or use `mq-only` / `mq-only-no-flush` and instantiate `Flowcept(check_safe_stops=False)`
 - Symptom: REST API import/start failures (`fastapi`/`uvicorn` missing)
   - Fix: `pip install flowcept[webservice,mongo]`
 - Symptom: `Flowcept.db` queries fail due to missing Mongo deps
@@ -535,7 +575,7 @@ Read more:
   - Fix:
     - start server: `flowcept --start-agent`
     - confirm `agent.mcp_host`/`agent.mcp_port` in settings
-    - in external assistant mode, load `src/flowcept/agents/SKILLS.md`
+    - in external assistant mode, follow `AGENTS.md` and `docs/agent.rst`
 - Symptom: PDF report generation fails
   - Fix: install report deps: `pip install flowcept[report_pdf]`
 
@@ -552,6 +592,7 @@ pip install flowcept[report_pdf]
 # Init settings
 flowcept --init-settings
 flowcept --config-profile full-online
+flowcept --config-profile mq-only
 flowcept --config-profile full-offline
 flowcept --show-settings
 
@@ -576,12 +617,12 @@ from flowcept import Flowcept
 docs = Flowcept.read_buffer_file("flowcept_buffer.jsonl")
 df = Flowcept.read_buffer_file("flowcept_buffer.jsonl", return_df=True, normalize_df=True)
 
-# Generate markdown provenance card
+# Generate markdown workflow card
 Flowcept.generate_report(
-    report_type="provenance_card",
+    report_type="workflow_card",
     format="markdown",
     workflow_id="<workflow_id>",
-    output_path="PROVENANCE_CARD.md",
+    output_path="WORKFLOW_CARD.md",
 )
 
 # Generate PDF provenance report

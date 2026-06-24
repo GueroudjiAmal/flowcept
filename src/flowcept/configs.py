@@ -18,10 +18,9 @@ DEFAULT_SETTINGS = {
     "experiment": {},
     "mq": {"enabled": False},
     "kv_db": {"enabled": False},
-    "web_server": {},
+    "web_server": {"max_label_length": 30},
     "sys_metadata": {},
     "extra_metadata": {},
-    "analytics": {},
     "db_buffer": {},
     "databases": {"mongodb": {"enabled": False}, "lmdb": {"enabled": False}},
     "adapters": {},
@@ -62,9 +61,9 @@ else:
         SETTINGS_PATH = str(resources.files("resources").joinpath("sample_settings.yaml"))
 
         with open(SETTINGS_PATH) as f:
-            settings = OmegaConf.load(f)
+            settings = OmegaConf.to_container(OmegaConf.load(f), resolve=True)
     else:
-        settings = OmegaConf.load(SETTINGS_PATH)
+        settings = OmegaConf.to_container(OmegaConf.load(SETTINGS_PATH), resolve=True)
 
 # Making sure all settings are in place.
 keys = DEFAULT_SETTINGS.keys() - settings.keys()
@@ -148,6 +147,10 @@ LMDB_SETTINGS = DATABASES.get("lmdb", {})
 LMDB_ENABLED = False
 if LMDB_SETTINGS:
     LMDB_ENABLED = _get_env_bool("LMDB_ENABLED", LMDB_SETTINGS.get("enabled", False))
+    _lmdb_path_default = LMDB_SETTINGS.get("path", "flowcept_lmdb")
+    LMDB_SETTINGS["path"] = _get_env("LMDB_PATH", _lmdb_path_default)
+
+DBS_ENABLED = MONGO_ENABLED or LMDB_ENABLED
 
 # if not LMDB_ENABLED and not MONGO_ENABLED:
 #     # At least one of these variables need to be enabled.
@@ -169,17 +172,12 @@ DB_INSERTER_SLEEP_TRIALS_STOP = db_buffer_settings.get("stop_trials_sleep", 0.01
 # PROJECT SYSTEM SETTINGS #
 ###########################
 
-DB_FLUSH_MODE = settings["project"].get("db_flush_mode", "offline")
+DB_FLUSH_MODE = _get_env("DB_FLUSH_MODE", settings["project"].get("db_flush_mode", "offline"))
 PERF_LOG = settings["project"].get("performance_logging", False)
 JSON_SERIALIZER = settings["project"].get("json_serializer", "default")
 REPLACE_NON_JSON_SERIALIZABLE = settings["project"].get("replace_non_json_serializable", True)
 ENRICH_MESSAGES = settings["project"].get("enrich_messages", True)
 
-if DB_FLUSH_MODE == "online" and not MQ_ENABLED:
-    raise ValueError(
-        "Invalid configuration: project.db_flush_mode is 'online' but MQ is disabled. "
-        "Enable mq.enabled (or MQ_ENABLED=true) or set project.db_flush_mode to 'offline'."
-    )
 
 # Default: enable dump buffer only when running in offline flush mode.
 _DEFAULT_DUMP_BUFFER_ENABLED = DB_FLUSH_MODE == "offline"
@@ -256,14 +254,18 @@ EXTRA_METADATA.update({"mq_port": MQ_PORT})
 ######################
 settings.setdefault("web_server", {})
 _webserver_settings = settings.get("web_server", {})
-WEBSERVER_HOST = _webserver_settings.get("host", "0.0.0.0")
-WEBSERVER_PORT = int(_webserver_settings.get("port", 5000))
-
-######################
-#    ANALYTICS      #
-######################
-
-ANALYTICS = settings.get("analytics", None)
+WEBSERVER_HOST = _get_env("WEBSERVER_HOST", _webserver_settings.get("host", "127.0.0.1"))
+WEBSERVER_PORT = int(_get_env("WEBSERVER_PORT", _webserver_settings.get("port", 8008)))
+WEBSERVER_UI_ENABLED = _webserver_settings.get("ui_enabled", True)
+WEBSERVER_CORS_ORIGINS = _webserver_settings.get("cors_origins", [])
+WEBSERVER_SSE_POLL_INTERVAL = float(_webserver_settings.get("sse_poll_interval_sec", 2.0))
+WEBSERVER_SSE_MAX_BATCH = int(_webserver_settings.get("sse_max_batch", 500))
+WEBSERVER_DASHBOARDS_DIR = os.path.expanduser(
+    _webserver_settings.get("dashboards_dir", f"~/.{PROJECT_NAME}/dashboards")
+)
+WEBSERVER_MAX_LABEL_LENGTH = int(
+    _get_env("WEBSERVER_MAX_LABEL_LENGTH", _webserver_settings.get("max_label_length", 30))
+)
 
 ####################
 # INSTRUMENTATION  #
@@ -273,6 +275,9 @@ INSTRUMENTATION = settings.get("instrumentation", {})
 INSTRUMENTATION_ENABLED = INSTRUMENTATION.get("enabled", True)
 
 AGENT = settings.get("agent", {})
+AGENT_CHAT_ENABLED = AGENT.get("chat_enabled", True)
+AGENT_CHAT_MAX_TOOL_ITERATIONS = int(AGENT.get("chat_max_tool_iterations", 5))
+AGENT_CHAT_MAX_QUERY_LIMIT = int(AGENT.get("chat_max_query_limit", 1000))
 AGENT_AUDIO = _get_env_bool("AGENT_AUDIO", settings["agent"].get("audio_enabled", "false"))
 AGENT_HOST = _get_env("AGENT_HOST", settings["agent"].get("mcp_host", "localhost"))
 AGENT_PORT = int(_get_env("AGENT_PORT", settings["agent"].get("mcp_port", "8000")))
@@ -299,16 +304,26 @@ for adapter in settings.get("adapters", set()):
 # Config guardrails
 #####
 
-if MQ_ENABLED and not KVDB_ENABLED:
-    raise ValueError(
-        "Invalid configuration: MQ is enabled but kv_db is disabled. "
-        "Enable kv_db.enabled (and KVDB) when MQ is enabled."
-    )
 
-if DB_FLUSH_MODE == "offline" and (MQ_ENABLED or MONGO_ENABLED or LMDB_ENABLED or KVDB_ENABLED):
-    raise ValueError(
-        "Invalid configuration: project.db_flush_mode is 'offline' but MQ/DBs are enabled.\n"
-        f"mq.enabled={MQ_ENABLED}, kv_db.enabled={KVDB_ENABLED}, "
-        f"databases.mongodb.enabled={MONGO_ENABLED}, databases.lmdb.enabled={LMDB_ENABLED}.\n"
-        "Disable mq.enabled, kv_db.enabled, and databases when running offline."
-    )
+def validate_config():
+    """Validate runtime configuration. Call this before starting Flowcept, not at import time."""
+    if DB_FLUSH_MODE == "online" and not MQ_ENABLED:
+        raise ValueError(
+            "Invalid configuration: project.db_flush_mode is 'online' but MQ is disabled. "
+            "Enable mq.enabled (or MQ_ENABLED=true) or set project.db_flush_mode to 'offline'.\n"
+            "Quick fix with profiles:\n"
+            "  flowcept --config-profile full-online -y\n"
+            "  flowcept --config-profile full-offline -y"
+        )
+    if DB_FLUSH_MODE == "offline" and (MONGO_ENABLED or LMDB_ENABLED or KVDB_ENABLED):
+        raise ValueError(
+            "Invalid configuration: project.db_flush_mode is 'offline' but persistent DBs are enabled.\n"
+            f"kv_db.enabled={KVDB_ENABLED}, "
+            f"databases.mongodb.enabled={MONGO_ENABLED}, databases.lmdb.enabled={LMDB_ENABLED}.\n"
+            "Disable kv_db and databases when running offline.\n"
+            "Note: mq.enabled=true is allowed with db_flush_mode=offline — tasks accumulate locally\n"
+            "and are bulk-published to MQ in a single flush at the end of the run.\n"
+            "Quick fix with profiles:\n"
+            "  flowcept --config-profile full-offline -y\n"
+            "  flowcept --config-profile mq-only-no-flush -y"
+        )

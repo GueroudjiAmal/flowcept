@@ -111,6 +111,7 @@ def build_llm_model(
     service_provider=None,
     agent_id=BaseAgentContextManager.agent_id,
     track_tools=True,
+    return_response_object=False,
 ) -> FlowceptLLM:
     """
     Build and return an LLM instance using agent configuration.
@@ -123,7 +124,7 @@ def build_llm_model(
     LLM
         An initialized LLM object configured using the `AGENT` settings.
     """
-    _model_kwargs = AGENT.get("model_kwargs", {}).copy()
+    _model_kwargs = (AGENT.get("model_kwargs") or {}).copy()
     if model_kwargs is not None:
         for k in model_kwargs:
             _model_kwargs[k] = model_kwargs[k]
@@ -180,7 +181,7 @@ def build_llm_model(
     else:
         raise Exception("Currently supported providers are sambanova, openai, azure, and google.")
     if track_tools:
-        llm = FlowceptLLM(llm)
+        llm = FlowceptLLM(llm, return_response_object=return_response_object)
         if agent_id is None:
             agent_id = BaseAgentContextManager.agent_id
         llm.agent_id = agent_id

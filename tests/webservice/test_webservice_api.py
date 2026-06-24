@@ -11,6 +11,7 @@ from flowcept.commons.flowcept_dataclasses.blob_object import BlobObject
 from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
 from flowcept.webservice.deps import get_db_api
 from flowcept.webservice.main import create_app
+from flowcept.webservice.services.dashboard_store import get_dashboard_store
 
 
 class FakeDB:
@@ -26,12 +27,13 @@ class FakeDB:
             {"task_id": "t1", "workflow_id": "wf-1", "status": "finished", "started_at": 10},
             {"task_id": "t3", "workflow_id": "wf-2", "status": "finished", "started_at": 30},
         ]
+        self.agents = []
         self.objects = [
             {
                 "object_id": "o1",
                 "workflow_id": "wf-1",
                 "task_id": "t1",
-                "type": "dataset",
+                "object_type": "dataset",
                 "version": 1,
                 "custom_metadata": {"k": "v1"},
                 "data": b"payload-1",
@@ -41,7 +43,7 @@ class FakeDB:
                 "object_id": "o2",
                 "workflow_id": "wf-2",
                 "task_id": "t3",
-                "type": "ml_model",
+                "object_type": "ml_model",
                 "version": 2,
                 "custom_metadata": {"k": "v2", "loss": 0.42},
                 "data": b"payload-2",
@@ -51,7 +53,7 @@ class FakeDB:
                 "object_id": "o3",
                 "workflow_id": "wf-1",
                 "task_id": "t2",
-                "type": "ml_model",
+                "object_type": "ml_model",
                 "version": 3,
                 "custom_metadata": {"k": "v3", "loss": 0.11},
                 "data": b"payload-2",
@@ -160,7 +162,35 @@ class FakeDB:
                 rs = [{k: v for k, v in row.items() if k in projection} for row in rs]
             return rs[:limit] if limit else rs
 
+        if collection == "agents":
+            rs = [ag for ag in self.agents if self._matches_filter(ag, filter_)]
+            if sort:
+                for field, order in reversed(sort):
+                    rs = sorted(rs, key=lambda item: self._nested_get(item, field), reverse=(order == -1))
+            if projection:
+                rs = [{k: v for k, v in row.items() if k in projection} for row in rs]
+            return rs[:limit] if limit else rs
+
         return []
+
+    def delete_agents_with_filter(self, filter):
+        self.agents = [ag for ag in self.agents if not self._matches_filter(ag, filter)]
+        return True
+
+    def agent_query(
+        self,
+        filter,
+        projection=None,
+        limit=0,
+        sort=None,
+    ):
+        rs = [ag for ag in self.agents if self._matches_filter(ag, filter or {})]
+        if sort:
+            for field, order in reversed(sort):
+                rs = sorted(rs, key=lambda item: item.get(field), reverse=(order == -1))
+        if projection:
+            rs = [{k: v for k, v in row.items() if k in projection} for row in rs]
+        return rs[:limit] if limit else rs
 
     def task_query(
         self,
@@ -212,12 +242,49 @@ def build_client() -> tuple[TestClient, FakeDB]:
     return TestClient(app), fake_db
 
 
+class FakeDashboardStore:
+    """Small in-memory dashboard store for route contract tests."""
+
+    def __init__(self):
+        self.docs = {}
+
+    def save(self, dashboard):
+        self.docs[dashboard["dashboard_id"]] = dashboard
+        return True
+
+    def get(self, dashboard_id):
+        return self.docs.get(dashboard_id)
+
+    def list(self):
+        return list(self.docs.values())
+
+    def list_by_type(self, dashboard_type):
+        return [doc for doc in self.docs.values() if doc.get("dashboard_type") == dashboard_type]
+
+    def delete(self, dashboard_id):
+        return self.docs.pop(dashboard_id, None) is not None
+
+
+def test_info_endpoint():
+    from flowcept.version import __version__
+
+    client, _ = build_client()
+    rs = client.get("/api/v1/info")
+    assert rs.status_code == 200
+    assert rs.json() == {"service": "flowcept", "version": __version__}
+
+
 def test_root_and_openapi_endpoints():
     client, _ = build_client()
 
     root = client.get("/")
     assert root.status_code == 200
-    assert root.json()["service"] == "flowcept-webservice"
+    if root.headers["content-type"].startswith("application/json"):
+        # No built UI assets present: root exposes the API status payload.
+        assert root.json()["service"] == "flowcept-webservice"
+    else:
+        # Built UI assets present: root serves the SPA index page.
+        assert "text/html" in root.headers["content-type"]
 
     assert client.get("/openapi.json").status_code == 200
     assert client.get("/docs").status_code == 200
@@ -236,7 +303,7 @@ def test_workflows_list_get_and_query():
     rs = client.get("/api/v1/workflows", params={"limit": 10})
     assert rs.status_code == 200
     items = rs.json()["items"]
-    assert [item["workflow_id"] for item in items] == ["wf-2", "wf-1"]
+    assert [item["workflow_id"] for item in items] == ["wf-1", "wf-2"]
 
     rs = client.get("/api/v1/workflows", params={"user": "alice", "limit": 5})
     assert rs.status_code == 200
@@ -256,21 +323,49 @@ def test_workflows_list_get_and_query():
     assert rs.json()["count"] == 1
 
 
-def test_workflow_provenance_card_download_route():
+def test_workflow_card_download_route():
     client, _ = build_client()
 
     def _fake_generate_report(**kwargs):
         output = kwargs["output_path"]
-        Path(output).write_text("# Provenance Card\n\nworkflow: wf-1\n", encoding="utf-8")
+        Path(output).write_text("# Workflow Card\n\nworkflow: wf-1\n", encoding="utf-8")
         return {"output": output}
 
     with patch("flowcept.webservice.routers.workflows.Flowcept.generate_report", side_effect=_fake_generate_report):
-        rs = client.post("/api/v1/workflows/wf-1/reports/provenance-card/download")
+        rs = client.post("/api/v1/workflows/wf-1/reports/workflow-card/download")
 
     assert rs.status_code == 200
     assert rs.headers["content-type"].startswith("text/markdown")
-    assert "attachment; filename=\"provenance_card_wf-1.md\"" == rs.headers["content-disposition"]
-    assert "# Provenance Card" in rs.text
+    assert 'attachment; filename="workflow_card_wf-1.md"' == rs.headers["content-disposition"]
+    assert "# Workflow Card" in rs.text
+
+
+def test_workflow_card_pdf_download_route():
+    client, _ = build_client()
+
+    def _fake_generate_report(**kwargs):
+        output = kwargs["output_path"]
+        Path(output).write_bytes(b"%PDF-1.4\n%%EOF")
+        return {"output": output}
+
+    with patch("flowcept.webservice.services.reports.generate_report", side_effect=_fake_generate_report):
+        rs = client.get("/api/v1/workflows/wf-1/workflow_card", params={"format": "pdf"})
+
+    assert rs.status_code == 200
+    assert rs.headers["content-type"].startswith("application/pdf")
+    assert rs.headers["content-disposition"] == 'attachment; filename="workflow_card_wf-1.pdf"'
+    assert rs.content.startswith(b"%PDF-1.4")
+
+
+def test_workflow_card_route_is_named_workflow_card():
+    client, _ = build_client()
+
+    openapi = client.get("/openapi.json")
+    assert openapi.status_code == 200
+    schema = openapi.json()
+    paths = schema["paths"]
+    assert "/api/v1/workflows/{workflow_id}/workflow_card" in paths
+    assert "/api/v1/workflows/{workflow_id}/provenance_card" not in paths
 
 
 def test_workflows_errors():
@@ -282,21 +377,21 @@ def test_workflows_errors():
     rs = client.get("/api/v1/workflows", params={"filter_json": "not-json"})
     assert rs.status_code == 400
 
-    rs = client.post("/api/v1/workflows/does-not-exist/reports/provenance-card/download")
+    rs = client.post("/api/v1/workflows/does-not-exist/reports/workflow-card/download")
     assert rs.status_code == 404
 
 
-def test_workflow_provenance_card_download_generation_error():
+def test_workflow_card_download_generation_error():
     client, _ = build_client()
 
     with patch(
         "flowcept.webservice.routers.workflows.Flowcept.generate_report",
         side_effect=RuntimeError("report generation failed"),
     ):
-        rs = client.post("/api/v1/workflows/wf-1/reports/provenance-card/download")
+        rs = client.post("/api/v1/workflows/wf-1/reports/workflow-card/download")
 
     assert rs.status_code == 500
-    assert "Could not generate provenance card" in rs.json()["detail"]
+    assert "Could not generate workflow card" in rs.json()["detail"]
 
 
 def test_tasks_list_get_by_workflow_and_query():
@@ -305,7 +400,7 @@ def test_tasks_list_get_by_workflow_and_query():
     rs = client.get("/api/v1/tasks", params={"workflow_id": "wf-1", "limit": 10})
     assert rs.status_code == 200
     assert rs.json()["count"] == 2
-    assert [item["task_id"] for item in rs.json()["items"]] == ["t1", "t2"]
+    assert [item["task_id"] for item in rs.json()["items"]] == ["t2", "t1"]
 
     rs = client.get("/api/v1/tasks/t1")
     assert rs.status_code == 200
@@ -331,6 +426,9 @@ def test_tasks_list_get_by_workflow_and_query():
 
 def test_tasks_errors_and_validation():
     client, _ = build_client()
+
+    rs = client.get("/api/v1/tasks/")
+    assert rs.status_code == 404
 
     rs = client.get("/api/v1/tasks/missing")
     assert rs.status_code == 404
@@ -360,7 +458,7 @@ def test_objects_list_get_version_history_and_query():
 
     rs = client.get("/api/v1/objects", params={"limit": 10})
     assert rs.status_code == 200
-    assert [item["object_id"] for item in rs.json()["items"]] == ["o2", "o3", "o1"]
+    assert [item["object_id"] for item in rs.json()["items"]] == ["o1", "o2", "o3"]
 
     rs = client.get("/api/v1/objects/o1")
     assert rs.status_code == 200
@@ -425,11 +523,11 @@ def test_datasets_routes():
     rs = client.get("/api/v1/datasets")
     assert rs.status_code == 200
     assert rs.json()["count"] == 1
-    assert rs.json()["items"][0]["type"] == "dataset"
+    assert rs.json()["items"][0]["object_type"] == "dataset"
 
     rs = client.get("/api/v1/datasets/o1")
     assert rs.status_code == 200
-    assert rs.json()["type"] == "dataset"
+    assert rs.json()["object_type"] == "dataset"
 
     rs = client.get("/api/v1/datasets/o1/versions/1")
     assert rs.status_code == 200
@@ -442,7 +540,7 @@ def test_datasets_routes():
     rs = client.post("/api/v1/datasets/query", json={"filter": {}, "limit": 10})
     assert rs.status_code == 200
     assert rs.json()["count"] == 1
-    assert rs.json()["items"][0]["type"] == "dataset"
+    assert rs.json()["items"][0]["object_type"] == "dataset"
 
     rs = client.get("/api/v1/datasets/o2")
     assert rs.status_code == 404
@@ -454,11 +552,11 @@ def test_models_routes():
     rs = client.get("/api/v1/models")
     assert rs.status_code == 200
     assert rs.json()["count"] == 2
-    assert rs.json()["items"][0]["type"] == "ml_model"
+    assert rs.json()["items"][0]["object_type"] == "ml_model"
 
     rs = client.get("/api/v1/models/o2")
     assert rs.status_code == 200
-    assert rs.json()["type"] == "ml_model"
+    assert rs.json()["object_type"] == "ml_model"
 
     rs = client.get("/api/v1/models/o2/versions/2")
     assert rs.status_code == 200
@@ -471,7 +569,7 @@ def test_models_routes():
     rs = client.post("/api/v1/models/query", json={"filter": {}, "limit": 10})
     assert rs.status_code == 200
     assert rs.json()["count"] == 2
-    assert rs.json()["items"][0]["type"] == "ml_model"
+    assert rs.json()["items"][0]["object_type"] == "ml_model"
 
     rs = client.get("/api/v1/models/o1")
     assert rs.status_code == 404
@@ -488,7 +586,7 @@ def test_unified_scoped_query_models_supports_exists_and_nested_sort():
                 "custom_metadata.loss": {"$exists": True},
             },
             "sort": [{"field": "custom_metadata.loss", "order": 1}],
-            "projection": ["object_id", "type", "custom_metadata"],
+            "projection": ["object_id", "object_type", "custom_metadata"],
             "limit": 1,
         },
     )
@@ -496,7 +594,7 @@ def test_unified_scoped_query_models_supports_exists_and_nested_sort():
     body = rs.json()
     assert body["count"] == 1
     assert body["items"][0]["object_id"] == "o3"
-    assert body["items"][0]["type"] == "ml_model"
+    assert body["items"][0]["object_type"] == "ml_model"
     assert body["items"][0]["custom_metadata"]["loss"] == 0.11
 
 
@@ -538,8 +636,8 @@ def test_unified_scoped_query_objects_scope():
     rs = client.post(
         "/api/v1/query/objects",
         json={
-            "filter": {"type": "dataset"},
-            "projection": ["object_id", "type"],
+            "filter": {"object_type": "dataset"},
+            "projection": ["object_id", "object_type"],
             "limit": 10,
         },
     )
@@ -547,7 +645,7 @@ def test_unified_scoped_query_objects_scope():
     body = rs.json()
     assert body["count"] == 1
     assert body["items"][0]["object_id"] == "o1"
-    assert body["items"][0]["type"] == "dataset"
+    assert body["items"][0]["object_type"] == "dataset"
 
 
 def test_unified_scoped_query_datasets_scope_enforces_type():
@@ -555,7 +653,7 @@ def test_unified_scoped_query_datasets_scope_enforces_type():
     rs = client.post(
         "/api/v1/query/datasets",
         json={
-            "filter": {"type": "ml_model"},
+            "filter": {"object_type": "ml_model"},
             "limit": 10,
         },
     )
@@ -574,3 +672,237 @@ def test_unified_scoped_query_rejects_unsupported_operator():
     )
     assert rs.status_code == 400
     assert "Unsupported filter operator" in rs.json()["detail"]
+
+
+def test_dashboard_routes_accept_charts_contract():
+    app = create_app()
+    store = FakeDashboardStore()
+    app.dependency_overrides[get_dashboard_store] = lambda: store
+    client = TestClient(app)
+
+    spec = {
+        "name": "dashboard",
+        "context": {"workflow_id": "wf-1"},
+        "charts": [
+            {
+                "chart_id": "c1",
+                "type": "chart",
+                "data": {"source": "tasks", "filter": {"workflow_id": "wf-1"}},
+            }
+        ],
+        "layout": [{"chart_id": "c1", "x": 0, "y": 0, "w": 6, "h": 4}],
+    }
+
+    rs = client.post("/api/v1/dashboards", json=spec)
+    assert rs.status_code == 201
+    body = rs.json()
+    assert body["charts"][0]["chart_id"] == "c1"
+    assert body["layout"][0]["chart_id"] == "c1"
+
+
+def test_agents_and_dataflow_routes():
+    client, fake_db = build_client()
+
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "agent_id": "agent-1",
+            "source_agent_id": "orchestrator",
+            "used": {"x": 1},
+            "generated": {"y": 2},
+        },
+        {
+            "task_id": "t2",
+            "workflow_id": "wf-1",
+            "status": "running",
+            "started_at": 20,
+            "agent_id": "agent-2",
+            "used": {"y": 2},
+            "generated": {"z": 3},
+        },
+    ]
+    fake_db.agents = [
+        {"agent_id": "agent-1", "name": "Agent 1", "registered_at": 10},
+        {"agent_id": "agent-2", "name": "Agent 2", "registered_at": 20},
+    ]
+
+    rs = client.get("/api/v1/agents")
+    assert rs.status_code == 200
+    agents = rs.json()["items"]
+    assert len(agents) == 2
+    agent_map = {a["agent_id"]: a for a in agents}
+    assert "agent-1" in agent_map
+    assert "agent-2" in agent_map
+
+    rs = client.get("/api/v1/agents/agent-1")
+    assert rs.status_code == 200
+    assert rs.json()["agent"]["agent_id"] == "agent-1"
+
+    rs = client.get("/api/v1/workflows/wf-1/dataflow")
+    assert rs.status_code == 200
+    dataflow = rs.json()
+    task_nodes = [n for n in dataflow["nodes"] if n["kind"] == "task"]
+    assert len(task_nodes) == 2
+    for node in task_nodes:
+        stats = node["stats"]
+        assert "agent_id" in stats
+        assert "source_agent_id" in stats
+        if node["id"] == "task:t1":
+            assert stats["agent_id"] == "agent-1"
+            assert stats["source_agent_id"] == "orchestrator"
+
+
+def test_dataflow_label_fallback():
+    from flowcept import configs
+
+    original_max = getattr(configs, "WEBSERVER_MAX_LABEL_LENGTH", 30)
+
+    client, fake_db = build_client()
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "used": {
+                "short_key": 1,
+                "a_very_long_input_key_that_exceeds_ten_characters": 2,
+            },
+            "generated": {
+                "another_extremely_long_output_key_name_that_exceeds_ten": 3,
+            },
+        }
+    ]
+
+    try:
+        configs.WEBSERVER_MAX_LABEL_LENGTH = 10
+        rs = client.get("/api/v1/workflows/wf-1/dataflow")
+        assert rs.status_code == 200
+        dataflow = rs.json()
+
+        # Verify the chunks have fallback labels
+        chunks = [n for n in dataflow["nodes"] if n["kind"] == "chunk"]
+        assert len(chunks) == 2
+
+        # Since the labels are longer than 10 characters, they must fall back to "inputs (2)" and "outputs (1)"
+        input_chunk = next(n for n in chunks if n["stats"]["kind"] == "input")
+        output_chunk = next(n for n in chunks if n["stats"]["kind"] == "output")
+
+        assert input_chunk["label"] == "inputs (2)"
+        assert output_chunk["label"] == "outputs (1)"
+
+    finally:
+        configs.WEBSERVER_MAX_LABEL_LENGTH = original_max
+
+
+def test_dataflow_label_no_positional_args():
+    """Chunk labels must not expose raw arg_N positional-argument keys."""
+    client, fake_db = build_client()
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "used": {"arg_0": 1, "arg_1": 2},
+            "generated": {"result": 42},
+        }
+    ]
+    rs = client.get("/api/v1/workflows/wf-1/dataflow")
+    assert rs.status_code == 200
+    dataflow = rs.json()
+    chunks = [n for n in dataflow["nodes"] if n["kind"] == "chunk"]
+    assert len(chunks) == 2
+    input_chunk = next(n for n in chunks if n["stats"]["kind"] == "input")
+    # "arg_0, arg_1" is not a useful label; should fall back to count form
+    assert "arg_" not in input_chunk["label"]
+    # Named output keys should still render as-is
+    output_chunk = next(n for n in chunks if n["stats"]["kind"] == "output")
+    assert "result" in output_chunk["label"]
+
+
+def test_delete_empty_agents():
+    client, fake_db = build_client()
+    fake_db.agents = [
+        {"agent_id": "agent-active", "name": "Active Agent", "registered_at": 10},
+        {"agent_id": "agent-empty", "name": "Empty Agent", "registered_at": 20},
+    ]
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "agent_id": "agent-active",
+        }
+    ]
+
+    rs = client.delete("/api/v1/agents/cleanup/empty")
+    assert rs.status_code == 200
+    body = rs.json()
+    assert body["deleted_count"] == 1
+
+    # Verify agent-empty is deleted, and agent-active remains
+    agents = fake_db.agents
+    assert len(agents) == 1
+    assert agents[0]["agent_id"] == "agent-active"
+
+
+def test_dataflow_delegation_edge():
+    client, fake_db = build_client()
+
+    # case 1: task t2 has both source_agent_id and agent_id -> delegation edge should be created
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "agent_id": "orchestrator",
+            "used": {"x": 1},
+        },
+        {
+            "task_id": "t2",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 20,
+            "agent_id": "agent-1",
+            "source_agent_id": "orchestrator",
+            "used": {"y": 2},
+        },
+    ]
+    rs = client.get("/api/v1/workflows/wf-1/dataflow")
+    assert rs.status_code == 200
+    edges = rs.json()["edges"]
+    delegation_edges = [e for e in edges if e["relation"] == "delegation"]
+    assert len(delegation_edges) == 1
+    assert delegation_edges[0]["source"] == "task:t1"
+    assert delegation_edges[0]["target"] == "task:t2"
+
+    # case 2: task t2 has source_agent_id but NO agent_id -> delegation edge should NOT be created
+    fake_db.tasks = [
+        {
+            "task_id": "t1",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 10,
+            "agent_id": "orchestrator",
+            "used": {"x": 1},
+        },
+        {
+            "task_id": "t2",
+            "workflow_id": "wf-1",
+            "status": "finished",
+            "started_at": 20,
+            "source_agent_id": "orchestrator",
+            "used": {"y": 2},
+        },
+    ]
+    rs = client.get("/api/v1/workflows/wf-1/dataflow")
+    assert rs.status_code == 200
+    edges = rs.json()["edges"]
+    delegation_edges = [e for e in edges if e["relation"] == "delegation"]
+    assert len(delegation_edges) == 0

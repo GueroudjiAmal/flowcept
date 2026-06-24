@@ -11,6 +11,8 @@ jobs:
     env:
       MONGO_ENABLED: true
       LMDB_ENABLED: false
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
     timeout-minutes: 60
     if: "!contains(github.event.head_commit.message, 'CI Bot')"
 
@@ -38,6 +40,12 @@ jobs:
 
       - name: Install dependencies
         run: pip install .[extras,ml_dev,dask,mongo]
+
+      - name: Init LLM test settings
+        run: |
+          rm -f "${FLOWCEPT_SETTINGS_PATH:-$HOME/.flowcept/settings.yaml}"
+          flowcept --init-settings --full --dask -y
+          flowcept --config-profile full-online -y
 
       - name: Test LLM with Dask cluster
         env:

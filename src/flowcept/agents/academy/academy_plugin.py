@@ -20,7 +20,7 @@ Key FlowCept fields used correctly:
   parent_task_id             — LLM tasks are children of the action that spawned them
   group_id                   — loop events share a group_id for grouping
   activity_id                — action name, llm call type, loop name, lifecycle event
-  subtype                    — academy_action | academy_loop | academy_lifecycle | llm_call
+  subtype                    — academy_action | agent_communication | academy_loop | academy_lifecycle | llm_call
   used / generated           — inputs and outputs
   status                     — proper Status enum values (FINISHED | ERROR)
   telemetry_at_start/end     — CPU/memory snapshots via TelemetryCapture
@@ -211,6 +211,8 @@ _current_action_task_id: contextvars.ContextVar[str | None] = contextvars.Contex
 _current_academy_agent_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "_current_academy_agent_id", default=None
 )
+
+_PENDING_AGENT_COMMUNICATIONS: dict[str, dict[str, Any]] = {}
 
 # LLM payload types that carry a complete request+response pair.
 _CAPTURE_LLM_TYPES = frozenset({
@@ -613,6 +615,35 @@ def _install_runtime_patches() -> None:
 
     Runtime.action = _action_with_prov  # type: ignore[method-assign]
 
+    # ---- message-level agent communication -------------------------------
+    _orig_request_handler = Runtime._request_handler
+
+    async def _request_handler_with_prov(self, request: Any) -> None:
+        interceptor = _ACTIVE_INTERCEPTOR
+        if interceptor is not None:
+            try:
+                _start_agent_communication_from_request(interceptor, self, request)
+            except Exception:
+                pass
+        return await _orig_request_handler(self, request)
+
+    Runtime._request_handler = _request_handler_with_prov  # type: ignore[method-assign]
+
+    _orig_send_response = Runtime._send_response
+
+    async def _send_response_with_prov(self, response: Any) -> None:
+        try:
+            return await _orig_send_response(self, response)
+        finally:
+            interceptor = _ACTIVE_INTERCEPTOR
+            if interceptor is not None:
+                try:
+                    _finish_agent_communication_from_response(interceptor, response)
+                except Exception:
+                    pass
+
+    Runtime._send_response = _send_response_with_prov  # type: ignore[method-assign]
+
     # ---- @loop execution -------------------------------------------------
     _orig_execute_loop = Runtime._execute_loop
 
@@ -701,6 +732,7 @@ def _uninstall_runtime_patches() -> None:
     _ACTIVE_INTERCEPTOR = None
     _AGENT_WORKFLOWS.clear()
     _AGENT_ID_TO_TYPE.clear()
+    _PENDING_AGENT_COMMUNICATIONS.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -819,6 +851,144 @@ def _emit_action(
         if tel_end is not None:
             task["telemetry_at_end"] = _tel_to_dict(tel_end)
         interceptor.intercept_task(task)
+
+
+def _message_body_kind(message: Any) -> str:
+    try:
+        body = message.get_body()
+    except Exception:
+        return "unknown"
+    return getattr(body, "kind", type(body).__name__)
+
+
+def _message_header_value(message: Any, name: str) -> Any:
+    try:
+        return getattr(message.header, name)
+    except Exception:
+        return getattr(message, name, None)
+
+
+def _message_tag(message: Any) -> str:
+    return str(_message_header_value(message, "tag"))
+
+
+def _is_agent_id(value: Any) -> bool:
+    return str(value).startswith("AgentId<")
+
+
+def _start_agent_communication_from_request(
+    interceptor: AcademyInterceptor,
+    runtime: Any,
+    request: Any,
+) -> None:
+    try:
+        from academy.message import ActionRequest
+    except Exception:
+        return
+
+    try:
+        body = request.get_body()
+    except Exception:
+        return
+    if not isinstance(body, ActionRequest):
+        return
+
+    src = _message_header_value(request, "src")
+    dest = _message_header_value(request, "dest")
+    if not _is_agent_id(src) or not _is_agent_id(dest):
+        return
+
+    source_str, source_agent_id, source_workflow_id = _parse_source(src)
+    target_agent_id, target_agent_name = _agent_id_parts(dest)
+    runtime_agent_type, runtime_agent_id, runtime_agent_name = _agent_info(runtime)
+    tag = _message_tag(request)
+    started_at = time.time()
+    _PENDING_AGENT_COMMUNICATIONS[tag] = {
+        "task_id": f"academy-communication:{tag}",
+        "source_str": source_str,
+        "source_agent_id": source_agent_id,
+        "source_workflow_id": source_workflow_id,
+        "target_agent_id": target_agent_id,
+        "target_agent_name": target_agent_name or runtime_agent_name,
+        "target_agent_type": runtime_agent_type,
+        "runtime_agent_id": runtime_agent_id,
+        "message_label": str(_message_header_value(request, "label")),
+        "request_kind": str(_message_header_value(request, "kind")),
+        "request_body_kind": _message_body_kind(request),
+        "action": getattr(body, "action", None),
+        "args": _safe_clip(body.get_args()),
+        "kwargs": _safe_clip(body.get_kwargs()),
+        "started_at": started_at,
+    }
+
+
+def _finish_agent_communication_from_response(
+    interceptor: AcademyInterceptor,
+    response: Any,
+) -> None:
+    tag = _message_tag(response)
+    pending = _PENDING_AGENT_COMMUNICATIONS.pop(tag, None)
+    if pending is None:
+        return
+
+    ended_at = time.time()
+    response_summary = _response_summary(response)
+    task: dict[str, Any] = {
+        "task_id": pending["task_id"],
+        "subtype": "agent_communication",
+        "activity_id": "agent_communication",
+        "agent_id": pending["target_agent_id"],
+        "source_agent_id": pending["source_agent_id"],
+        "custom_metadata": {
+            "semantic_record_type": "agent_communication",
+            "instrumentation_layer": "dynamic_runtime",
+            "source_id": pending["source_str"],
+            "source_workflow_id": pending["source_workflow_id"],
+            "target_agent_type": pending["target_agent_type"],
+            "target_agent_name": pending["target_agent_name"],
+            "message_tag": tag,
+            "message_label": pending["message_label"],
+        },
+        "group_id": tag,
+        "started_at": pending["started_at"],
+        "ended_at": ended_at,
+        "status": "ERROR" if response_summary["is_error"] else "FINISHED",
+        "used": {
+            "message_kind": pending["request_kind"],
+            "body_kind": pending["request_body_kind"],
+            "action": pending["action"],
+            "args": pending["args"],
+            "kwargs": pending["kwargs"],
+        },
+        "generated": response_summary["generated"],
+        "stderr": response_summary["stderr"],
+        "tags": ["academy", "dynamic_runtime", "agent_communication"],
+    }
+    interceptor.intercept_task(task)
+
+
+def _response_summary(response: Any) -> dict[str, Any]:
+    body_kind = _message_body_kind(response)
+    try:
+        body = response.get_body()
+    except Exception:
+        body = None
+
+    generated: dict[str, Any] = {
+        "message_kind": str(_message_header_value(response, "kind")),
+        "body_kind": body_kind,
+    }
+    stderr = None
+    is_error = "error" in body_kind.lower()
+
+    for attr in ("result", "exception", "error_code"):
+        if body is not None and hasattr(body, attr):
+            value = getattr(body, attr)
+            generated[attr] = _safe_clip(value)
+            if attr in {"exception", "error_code"} and value is not None:
+                stderr = str(value)
+
+    return {"generated": generated, "stderr": stderr, "is_error": is_error}
 
 
 def _emit_loop_event(

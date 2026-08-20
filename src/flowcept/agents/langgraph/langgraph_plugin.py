@@ -984,7 +984,7 @@ def openai_chat(
 
 def anthropic_chat(
     prompt: str,
-    model: str = "claude-3-5-haiku-latest",
+    model: str = "claude-haiku-4-5-20251001",
     system: str = "You are a helpful assistant.",
     max_tokens: int = 1024,
     temperature: float | None = 1.0,
@@ -1104,7 +1104,7 @@ class FlowceptAnthropicClient:
 
         client = FlowceptAnthropicClient(anthropic.Anthropic(), agent_name="my-agent")
         response = client.messages.create(
-            model="claude-3-5-haiku-latest",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             messages=[{"role": "user", "content": "Hello"}],
         )

@@ -4,7 +4,7 @@ examples/agents/combined_example.py
 
 Runs all four frameworks simultaneously. Each increments a counter 5 times
 (1+2+3+4+5 = 15) concurrently in its own thread. Total = 4 × 15 = 60.
-A final openai_chat() call interprets the combined result.
+A final llm_chat() call (OpenAI or Anthropic) interprets the combined result.
 
     Academy ──┐
     AutoGen ──┤  (run in parallel)  →  combined total = 60
@@ -13,7 +13,7 @@ A final openai_chat() call interprets the combined result.
 
 Run
 ---
-    OPENAI_API_KEY=sk-... python examples/agents/combined_example.py
+    OPENAI_API_KEY=sk-... (or ANTHROPIC_API_KEY=sk-ant-...) python examples/agents/combined_example.py
 
 Plugin configuration
 --------------------
@@ -56,7 +56,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 from flowcept import Flowcept
-from flowcept.agents.academy.academy_plugin import openai_chat
+# Use whichever LLM provider has a key in the environment.
+if os.getenv("ANTHROPIC_API_KEY"):
+    from flowcept.agents.academy.academy_plugin import anthropic_chat as llm_chat
+
+    LLM_MODEL = "claude-haiku-4-5-20251001"
+else:
+    from flowcept.agents.academy.academy_plugin import openai_chat as llm_chat
+
+    LLM_MODEL = "gpt-4o-mini"
 
 
 # ============================================================
@@ -363,15 +371,15 @@ def main() -> None:
 
         combined_total = sum(results.values())
 
-        print("\n[combined] Calling openai_chat() to interpret combined result …", flush=True)
-        interpretation = openai_chat(
+        print("\n[combined] Calling llm_chat() to interpret combined result …", flush=True)
+        interpretation = llm_chat(
             prompt=(
                 f"Four independent frameworks (Academy, AutoGen, CrewAI, LangGraph) each "
                 f"incremented a counter 5 times with values 1, 2, 3, 4, 5, each reaching 15. "
                 f"Combined total = {combined_total}. "
                 f"In exactly one sentence, explain what this combined result represents."
             ),
-            model="gpt-4o-mini",
+            model=LLM_MODEL,
             system="You are a concise data analyst.",
             temperature=0.3,
             context={"example": "combined", "call_type": "interpret_result"},

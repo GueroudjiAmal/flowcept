@@ -224,7 +224,10 @@ def cmd_flush(args, config: Config) -> int:
 
     if not args.dry_run:
         try:
-            mq.stop()
+            # check_safe_stops=False: a flush has no interceptor instance to
+            # coordinate, and the control messages it would send carry a None
+            # id that crashes the document inserter's bookkeeping.
+            mq.stop(check_safe_stops=False)
         except Exception:
             # Best effort: the records are already published.
             pass

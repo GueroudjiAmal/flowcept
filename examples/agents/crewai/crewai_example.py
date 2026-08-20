@@ -4,12 +4,12 @@ examples/agents/crewai/crewai_example.py
 
 Counter test mirroring the Academy example:
   - CounterAgent increments a counter 5 times (values 1-5), reporting each step
-  - SummaryAgent reads the final total and calls openai_chat() to interpret it,
+  - SummaryAgent reads the final total and calls llm_chat() to interpret it,
     mirroring SummaryAgent.interpret_result() in the Academy example
 
 Run
 ---
-    OPENAI_API_KEY=sk-... python examples/agents/crewai/crewai_example.py
+    OPENAI_API_KEY=sk-... (or ANTHROPIC_API_KEY=sk-ant-...) python examples/agents/crewai/crewai_example.py
 
 Plugin configuration
 --------------------
@@ -35,7 +35,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 from flowcept import Flowcept
-from flowcept.agents.crewai.crewai_plugin import openai_chat
+# Use whichever LLM provider has a key in the environment.
+if os.getenv("ANTHROPIC_API_KEY"):
+    from flowcept.agents.crewai.crewai_plugin import anthropic_chat as llm_chat
+
+    LLM_MODEL = "claude-haiku-4-5-20251001"
+else:
+    from flowcept.agents.crewai.crewai_plugin import openai_chat as llm_chat
+
+    LLM_MODEL = "gpt-4o-mini"
 
 try:
     from crewai import Agent, Task, Crew, LLM
@@ -144,15 +152,15 @@ def main() -> None:
         final_value = 15  # 1+2+3+4+5
 
         # Interpret the result — mirrors SummaryAgent.interpret_result() @action.
-        # openai_chat() fires record_llm_call() automatically.
-        print("\n[example] Calling openai_chat() to interpret the counter result …", flush=True)
-        interpretation = openai_chat(
+        # llm_chat() fires record_llm_call() automatically.
+        print("\n[example] Calling llm_chat() to interpret the counter result …", flush=True)
+        interpretation = llm_chat(
             prompt=(
                 f"A counter was incremented 5 times with values 1, 2, 3, 4, 5 "
                 f"and reached a final value of {final_value}. "
                 f"In exactly one sentence, explain what this arithmetic result represents."
             ),
-            model="gpt-4o-mini",
+            model=LLM_MODEL,
             system="You are a concise data analyst.",
             temperature=0.3,
             context={"agent": "Counter", "call_type": "interpret_result"},

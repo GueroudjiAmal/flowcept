@@ -112,6 +112,7 @@ async for message in trace_query(prompt="fix the failing test"):
 
 # OpenAI Agents SDK — register once, nothing else changes
 from flowcept.agents.openai_agents.openai_agents_plugin import install
+
 install()
 
 # LangChain / LangGraph — pass the handler as a callback

@@ -3,12 +3,12 @@ Academy example
 ===============
 
 Two Academy agents increment a counter five times (1+2+3+4+5 = 15), then an
-openai_chat() call interprets the final value — mirroring the AutoGen / CrewAI /
+llm_chat() call (OpenAI or Anthropic) interprets the final value — mirroring the AutoGen / CrewAI /
 LangGraph examples.
 
 Run
 ---
-    OPENAI_API_KEY=sk-... python examples/agents/academy/academy_example.py
+    OPENAI_API_KEY=sk-... (or ANTHROPIC_API_KEY=sk-ant-...) python examples/agents/academy/academy_example.py
 
 Plugin configuration
 --------------------
@@ -35,11 +35,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from academy.agent import Agent, action, loop
 from academy.exchange import LocalExchangeFactory
-from academy.logging import init_logging
 from academy.manager import Manager
 
 from flowcept import Flowcept
-from flowcept.agents.academy.academy_plugin import openai_chat
+# Use whichever LLM provider has a key in the environment.
+if os.getenv("ANTHROPIC_API_KEY"):
+    from flowcept.agents.academy.academy_plugin import anthropic_chat as llm_chat
+
+    LLM_MODEL = "claude-haiku-4-5-20251001"
+else:
+    from flowcept.agents.academy.academy_plugin import openai_chat as llm_chat
+
+    LLM_MODEL = "gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +139,9 @@ async def _run() -> int:
 
 
 def main() -> None:
-    init_logging("INFO")
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
 
     with Flowcept():
         result = asyncio.run(_run())
@@ -143,14 +152,14 @@ def main() -> None:
     print(f"\nCounter reached {result}  (expected 15 = 1+2+3+4+5)", flush=True)
     assert result == 15, f"Expected 15 but got {result}"
 
-    print("\n[example] Calling openai_chat() to interpret the counter result …", flush=True)
-    interpretation = openai_chat(
+    print("\n[example] Calling llm_chat() to interpret the counter result …", flush=True)
+    interpretation = llm_chat(
         prompt=(
             f"A counter was incremented 5 times with values 1, 2, 3, 4, 5 "
             f"and reached a final value of {result}. "
             f"In exactly one sentence, explain what this arithmetic result represents."
         ),
-        model="gpt-4o-mini",
+        model=LLM_MODEL,
         system="You are a concise data analyst.",
         temperature=0.3,
         context={"agent": "SummaryAgent", "call_type": "interpret_result"},

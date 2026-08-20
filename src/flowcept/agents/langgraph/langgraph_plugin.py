@@ -39,6 +39,7 @@ Or as a context manager:
     with FlowceptLangGraphPlugin(config={"workflow_name": "my-graph"}) as plugin:
         result = graph.invoke(state, config={"callbacks": [plugin.callback_handler]})
 """
+
 from __future__ import annotations
 
 import os
@@ -57,6 +58,7 @@ _log = logging.getLogger(__name__)
 
 import threading
 
+
 class _ProvenanceStats:
     """Lightweight thread-safe accumulator for provenance capture timings."""
 
@@ -66,8 +68,8 @@ class _ProvenanceStats:
         self._lock: threading.Lock = threading.Lock()
         self._counts: dict[str, int] = {}
         self._totals: dict[str, float] = {}
-        self._mins:   dict[str, float] = {}
-        self._maxs:   dict[str, float] = {}
+        self._mins: dict[str, float] = {}
+        self._maxs: dict[str, float] = {}
         self._raw: list[tuple[str, str, float]] = []
 
     def record(self, category: str, elapsed: float) -> None:
@@ -76,8 +78,8 @@ class _ProvenanceStats:
             if category not in self._counts:
                 self._counts[category] = 0
                 self._totals[category] = 0.0
-                self._mins[category]   = float("inf")
-                self._maxs[category]   = 0.0
+                self._mins[category] = float("inf")
+                self._maxs[category] = 0.0
             self._counts[category] += 1
             self._totals[category] += elapsed
             if elapsed < self._mins[category]:
@@ -88,27 +90,24 @@ class _ProvenanceStats:
 
     def summary(self) -> str:
         col = 22
-        header = (
-            f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} "
-            f"{'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
-        )
+        header = f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} {'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
         sep = "-" * len(header)
         rows = [header, sep]
         with self._lock:
             for cat in sorted(self._counts):
-                n     = self._counts[cat]
+                n = self._counts[cat]
                 total = self._totals[cat]
-                mean  = (total / n) if n else 0.0
-                mn    = self._mins.get(cat, 0.0)
-                mx    = self._maxs.get(cat, 0.0)
+                mean = (total / n) if n else 0.0
+                mn = self._mins.get(cat, 0.0)
+                mx = self._maxs.get(cat, 0.0)
                 rows.append(
-                    f"{cat:<{col}} {n:>7} {total*1e3:>11.3f} "
-                    f"{mean*1e6:>9.1f} {mn*1e6:>8.1f} {mx*1e6:>8.1f}"
+                    f"{cat:<{col}} {n:>7} {total * 1e3:>11.3f} {mean * 1e6:>9.1f} {mn * 1e6:>8.1f} {mx * 1e6:>8.1f}"
                 )
         return "\n".join(rows)
 
     def to_csv(self, path: str, workflow_id: str | None = None) -> None:
         import csv
+
         write_header = not os.path.exists(path)
         with self._lock:
             raw_snapshot = list(self._raw)
@@ -116,9 +115,9 @@ class _ProvenanceStats:
         rows = [
             {
                 "timestamp_utc": ts,
-                "workflow_id":   wf,
-                "category":      cat,
-                "elapsed_us":    round(elapsed * 1e6, 3),
+                "workflow_id": wf,
+                "category": cat,
+                "elapsed_us": round(elapsed * 1e6, 3),
             }
             for ts, cat, elapsed in raw_snapshot
         ]
@@ -133,6 +132,7 @@ class _ProvenanceStats:
 # ---------------------------------------------------------------------------
 # Interceptor wrapper (same pattern as AcademyInterceptor)
 # ---------------------------------------------------------------------------
+
 
 class LangGraphInterceptor:
     """Manages a BaseInterceptor directly for LangGraph provenance (Dask-style)."""
@@ -179,6 +179,7 @@ class LangGraphInterceptor:
         if self._interceptor is None:
             return str(uuid.uuid4())
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
         wf.name = graph_name
@@ -212,6 +213,7 @@ class LangGraphInterceptor:
 # ---------------------------------------------------------------------------
 # LangGraph callback handler
 # ---------------------------------------------------------------------------
+
 
 class FlowceptLangGraphCallback:
     """
@@ -264,13 +266,13 @@ class FlowceptLangGraphCallback:
             return True
         id_parts = (serialized or {}).get("id", [])
         graph_classes = {
-            "CompiledStateGraph", "CompiledGraph", "Pregel",
-            "StateGraph", "MessageGraph",
+            "CompiledStateGraph",
+            "CompiledGraph",
+            "Pregel",
+            "StateGraph",
+            "MessageGraph",
         }
-        return bool(
-            graph_classes.intersection(id_parts)
-            or any(t.startswith("__pregel_") for t in (tags or []))
-        )
+        return bool(graph_classes.intersection(id_parts) or any(t.startswith("__pregel_") for t in (tags or [])))
 
     def _node_name(self, serialized: dict | None, name: str | None) -> str:
         """Extract a human-readable node name."""
@@ -282,11 +284,7 @@ class FlowceptLangGraphCallback:
     def _model_name(self, serialized: dict | None) -> str:
         id_parts = (serialized or {}).get("id", [])
         kwargs = (serialized or {}).get("kwargs", {})
-        return (
-            kwargs.get("model_name")
-            or kwargs.get("model")
-            or (id_parts[-1] if id_parts else "unknown_model")
-        )
+        return kwargs.get("model_name") or kwargs.get("model") or (id_parts[-1] if id_parts else "unknown_model")
 
     def _tel(self) -> Any:
         tc = self._interceptor.telemetry_capture
@@ -348,12 +346,12 @@ class FlowceptLangGraphCallback:
                 custom["source_agent_id"] = str(source_agent_id)
             # Buffer the skeleton — emitted as ONE complete record in on_chain_end
             self._run_start_task[run_id] = {
-                "task_id":    task_id,
-                "subtype":    "langgraph_graph",
+                "task_id": task_id,
+                "subtype": "langgraph_graph",
                 "activity_id": graph_name,
-                "group_id":   group_id,
+                "group_id": group_id,
                 "started_at": self._run_start[run_id],
-                "used":       {"inputs": _safe_clip(inputs)},
+                "used": {"inputs": _safe_clip(inputs)},
                 "custom_metadata": custom,
             }
         else:
@@ -378,12 +376,12 @@ class FlowceptLangGraphCallback:
                 custom["source_agent_id"] = source_agent_id
             # Buffer the skeleton — emitted as ONE complete record in on_chain_end
             skeleton: dict[str, Any] = {
-                "task_id":      task_id,
-                "subtype":      "langgraph_node",
-                "activity_id":  node,
-                "group_id":     group_id,
-                "started_at":   self._run_start[run_id],
-                "used":         {"inputs": _safe_clip(inputs)},
+                "task_id": task_id,
+                "subtype": "langgraph_node",
+                "activity_id": node,
+                "group_id": group_id,
+                "started_at": self._run_start[run_id],
+                "used": {"inputs": _safe_clip(inputs)},
                 "custom_metadata": custom,
             }
             if parent_task_id:
@@ -402,8 +400,8 @@ class FlowceptLangGraphCallback:
     ) -> None:
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
-        tel_start  = self._run_tel_start.pop(run_id, None)
-        tel_end    = self._tel()
+        tel_start = self._run_tel_start.pop(run_id, None)
+        tel_end = self._tel()
         self._run_to_task.pop(run_id, None)
 
         is_graph = run_id in self._graph_runs
@@ -415,11 +413,13 @@ class FlowceptLangGraphCallback:
 
         # Merge buffered start skeleton with completion data → ONE complete record
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"outputs": _safe_clip(outputs)},
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"outputs": _safe_clip(outputs)},
+            }
+        )
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         if tel_end is not None:
@@ -438,7 +438,7 @@ class FlowceptLangGraphCallback:
     ) -> None:
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
-        tel_start  = self._run_tel_start.pop(run_id, None)
+        tel_start = self._run_tel_start.pop(run_id, None)
         self._run_to_task.pop(run_id, None)
         is_graph = run_id in self._graph_runs
         if is_graph:
@@ -448,11 +448,13 @@ class FlowceptLangGraphCallback:
             self._run_to_graph_run.pop(run_id, None)
 
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(error),
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(error),
+            }
+        )
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         self._interceptor.intercept_task(task)
@@ -484,12 +486,12 @@ class FlowceptLangGraphCallback:
         parent_task_id = self._run_to_task.get(parent_run_id) if parent_run_id else None
         model_name = self._model_name(serialized)
         skeleton: dict[str, Any] = {
-            "task_id":     task_id,
-            "subtype":     "llm_call",
+            "task_id": task_id,
+            "subtype": "llm_call",
             "activity_id": model_name,
-            "group_id":    group_id,
-            "started_at":  self._run_start[run_id],
-            "used":        {"prompts": _safe_clip(prompts), "model": model_name},
+            "group_id": group_id,
+            "started_at": self._run_start[run_id],
+            "used": {"prompts": _safe_clip(prompts), "model": model_name},
             "custom_metadata": {"model": model_name},
         }
         if parent_task_id:
@@ -507,8 +509,8 @@ class FlowceptLangGraphCallback:
     ) -> None:
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
-        tel_start  = self._run_tel_start.pop(run_id, None)
-        tel_end    = self._tel()
+        tel_start = self._run_tel_start.pop(run_id, None)
+        tel_end = self._tel()
         self._run_to_task.pop(run_id, None)
         self._run_to_graph_run.pop(run_id, None)
 
@@ -528,17 +530,19 @@ class FlowceptLangGraphCallback:
 
         # Merge buffered start skeleton (includes prompts in used) with response data
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at": time.time(),
-            "status":   "FINISHED",
-            "generated": {
-                "text":              text,
-                "prompt_tokens":     usage.get("prompt_tokens"),
-                "completion_tokens": usage.get("completion_tokens"),
-                "total_tokens":      usage.get("total_tokens"),
-                "model":             model_name,
-            },
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {
+                    "text": text,
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                    "model": model_name,
+                },
+            }
+        )
         # Update activity_id and model in custom_metadata if model is now known
         if model_name != "unknown":
             task["activity_id"] = model_name
@@ -566,11 +570,13 @@ class FlowceptLangGraphCallback:
         self._run_to_graph_run.pop(run_id, None)
 
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(error),
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(error),
+            }
+        )
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         self._interceptor.intercept_task(task)
@@ -606,12 +612,12 @@ class FlowceptLangGraphCallback:
             [[m.content if hasattr(m, "content") else str(m) for m in turn] for turn in messages]
         )
         skeleton: dict[str, Any] = {
-            "task_id":     task_id,
-            "subtype":     "llm_call",
+            "task_id": task_id,
+            "subtype": "llm_call",
             "activity_id": model_name,
-            "group_id":    group_id,
-            "started_at":  self._run_start[run_id],
-            "used":        {"messages": serialized_messages, "model": model_name},
+            "group_id": group_id,
+            "started_at": self._run_start[run_id],
+            "used": {"messages": serialized_messages, "model": model_name},
             "custom_metadata": {"model": model_name},
         }
         if parent_task_id:
@@ -649,12 +655,12 @@ class FlowceptLangGraphCallback:
         task_id = self._run_to_task[run_id]
         # Buffer skeleton — emitted as ONE complete record in on_tool_end
         skeleton: dict[str, Any] = {
-            "task_id":     task_id,
-            "subtype":     "tool_call",
+            "task_id": task_id,
+            "subtype": "tool_call",
             "activity_id": tool_name,
-            "group_id":    group_id,
-            "started_at":  self._run_start[run_id],
-            "used":        {"input": _safe_clip(input_str)},
+            "group_id": group_id,
+            "started_at": self._run_start[run_id],
+            "used": {"input": _safe_clip(input_str)},
             "custom_metadata": {"tool_name": tool_name},
         }
         if parent_task_id:
@@ -672,17 +678,19 @@ class FlowceptLangGraphCallback:
     ) -> None:
         t0 = time.perf_counter()
         tel_start = self._run_tel_start.pop(run_id, None)
-        tel_end   = self._tel()
+        tel_end = self._tel()
         self._run_start.pop(run_id, None)
         self._run_to_task.pop(run_id, None)
         self._run_to_graph_run.pop(run_id, None)
 
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"output": _safe_clip(output)},
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"output": _safe_clip(output)},
+            }
+        )
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         if tel_end is not None:
@@ -706,11 +714,13 @@ class FlowceptLangGraphCallback:
         self._run_to_graph_run.pop(run_id, None)
 
         task: dict[str, Any] = self._run_start_task.pop(run_id, {})
-        task.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(error),
-        })
+        task.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(error),
+            }
+        )
         if tel_start is not None:
             task["telemetry_at_start"] = _tel_to_dict(tel_start)
         self._interceptor.intercept_task(task)
@@ -787,37 +797,59 @@ def record_llm_call(payload: dict) -> None:
         model = payload.get("model_used") or payload.get("model", "unknown")
 
         used: dict = {}
-        for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
-                  "temperature", "top_p", "max_tokens", "reasoning_effort",
-                  "tools_provided", "tool_choice", "stop_sequences", "top_k",
-                  "thinking_budget_tokens"):
+        for k in (
+            "model",
+            "model_used",
+            "messages",
+            "user_prompt",
+            "system_prompt",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "reasoning_effort",
+            "tools_provided",
+            "tool_choice",
+            "stop_sequences",
+            "top_k",
+            "thinking_budget_tokens",
+        ):
             if k in payload:
                 used[k] = payload[k]
         if payload.get("temperature_suppressed"):
             used["temperature_suppressed"] = True
 
         generated: dict = {}
-        for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
-                  "tool_calls", "tool_uses", "thinking_text",
-                  "system_fingerprint", "response_id", "usage", "elapsed_s"):
+        for k in (
+            "text",
+            "finish_reason",
+            "stop_reason",
+            "stop_sequence",
+            "tool_calls",
+            "tool_uses",
+            "thinking_text",
+            "system_fingerprint",
+            "response_id",
+            "usage",
+            "elapsed_s",
+        ):
             if k in payload:
                 generated[k] = payload[k]
         if "error" in payload:
             generated["error"] = str(payload["error"])
 
         task: dict = {
-            "task_id":      str(_uuid.uuid4()),
-            "subtype":      "llm_call",
-            "activity_id":  model,
-            "started_at":   now - elapsed,
-            "ended_at":     now,
-            "status":       "ERROR" if "error" in payload else "FINISHED",
-            "used":         used,
-            "generated":    generated,
+            "task_id": str(_uuid.uuid4()),
+            "subtype": "llm_call",
+            "activity_id": model,
+            "started_at": now - elapsed,
+            "ended_at": now,
+            "status": "ERROR" if "error" in payload else "FINISHED",
+            "used": used,
+            "generated": generated,
             "custom_metadata": {
-                "model":     model,
+                "model": model,
                 "framework": payload.get("context", {}).get("framework", ""),
-                "context":   payload.get("context", {}),
+                "context": payload.get("context", {}),
             },
         }
         interceptor.intercept_task(task)
@@ -915,36 +947,38 @@ def openai_chat(
             for tc in choice.message.tool_calls
         ]
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": messages,
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-        "n": n,
-        "stop": stop,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "seed": seed,
-        "reasoning_effort": reasoning_effort,
-        "response_format": response_format,
-        "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "finish_reason": choice.finish_reason,
-        "tool_calls": tool_calls,
-        "system_fingerprint": getattr(response, "system_fingerprint", None),
-        "response_id": response.id,
-        "created": response.created,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": messages,
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "n": n,
+            "stop": stop,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "seed": seed,
+            "reasoning_effort": reasoning_effort,
+            "response_format": response_format,
+            "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "finish_reason": choice.finish_reason,
+            "tool_calls": tool_calls,
+            "system_fingerprint": getattr(response, "system_fingerprint", None),
+            "response_id": response.id,
+            "created": response.created,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
@@ -1014,38 +1048,40 @@ def anthropic_chat(
 
     usage = response.usage
     usage_dict = {
-        "input_tokens":                  getattr(usage, "input_tokens", None),
-        "output_tokens":                 getattr(usage, "output_tokens", None),
-        "cache_creation_input_tokens":   getattr(usage, "cache_creation_input_tokens", None),
-        "cache_read_input_tokens":       getattr(usage, "cache_read_input_tokens", None),
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
     }
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": req["messages"],
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "top_k": top_k,
-        "stop_sequences": stop_sequences,
-        "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
-        "tools_provided": [t.get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "thinking_text": thinking_text if thinking_text else None,
-        "finish_reason": response.stop_reason,
-        "stop_sequence": response.stop_sequence,
-        "tool_uses": tool_uses if tool_uses else None,
-        "response_id": response.id,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": req["messages"],
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "top_k": top_k,
+            "stop_sequences": stop_sequences,
+            "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
+            "tools_provided": [t.get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "thinking_text": thinking_text if thinking_text else None,
+            "finish_reason": response.stop_reason,
+            "stop_sequence": response.stop_sequence,
+            "tool_uses": tool_uses if tool_uses else None,
+            "response_id": response.id,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
@@ -1053,6 +1089,7 @@ def anthropic_chat(
 # FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
 # capture full provenance for every messages.create / messages.stream call.
 # ---------------------------------------------------------------------------
+
 
 class FlowceptAnthropicClient:
     """
@@ -1094,6 +1131,7 @@ class _FlowceptAnthropicMessages:
 
     def create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1101,6 +1139,7 @@ class _FlowceptAnthropicMessages:
 
     async def async_create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = await self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1108,6 +1147,7 @@ class _FlowceptAnthropicMessages:
 
     def stream(self, **kwargs):
         import time as _time
+
         return _FlowceptAnthropicStream(self._inner.stream(**kwargs), kwargs, self._record, _time.time())
 
     def _record(self, kwargs, result, elapsed):
@@ -1123,26 +1163,53 @@ class _FlowceptAnthropicMessages:
                 elif btype == "thinking":
                     thinking_text += getattr(block, "thinking", "")
                 elif btype == "tool_use":
-                    tool_uses.append({"id": getattr(block, "id", None), "name": getattr(block, "name", None), "input": getattr(block, "input", None)})
+                    tool_uses.append(
+                        {
+                            "id": getattr(block, "id", None),
+                            "name": getattr(block, "name", None),
+                            "input": getattr(block, "input", None),
+                        }
+                    )
             usage = getattr(result, "usage", None)
-            usage_dict = {attr: getattr(usage, attr, None) for attr in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")} if usage else {}
+            usage_dict = (
+                {
+                    attr: getattr(usage, attr, None)
+                    for attr in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                    )
+                }
+                if usage
+                else {}
+            )
             ctx = dict(self._context)
             if self._agent_name:
                 ctx["agent_name"] = self._agent_name
             payload = {
-                "type": "chat_completion", "model": model, "model_used": getattr(result, "model", model),
-                "messages": kwargs.get("messages"), "system_prompt": kwargs.get("system"),
-                "max_tokens": kwargs.get("max_tokens"), "temperature": kwargs.get("temperature"),
-                "top_p": kwargs.get("top_p"), "top_k": kwargs.get("top_k"),
+                "type": "chat_completion",
+                "model": model,
+                "model_used": getattr(result, "model", model),
+                "messages": kwargs.get("messages"),
+                "system_prompt": kwargs.get("system"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"),
+                "top_k": kwargs.get("top_k"),
                 "stop_sequences": kwargs.get("stop_sequences"),
                 "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
                 "tools_provided": [t.get("name") for t in (kwargs.get("tools") or [])],
                 "tool_choice": kwargs.get("tool_choice"),
-                "text": text, "thinking_text": thinking_text or None,
+                "text": text,
+                "thinking_text": thinking_text or None,
                 "finish_reason": getattr(result, "stop_reason", None),
                 "stop_sequence": getattr(result, "stop_sequence", None),
-                "tool_uses": tool_uses or None, "response_id": getattr(result, "id", None),
-                "usage": usage_dict, "elapsed_s": elapsed, "context": ctx,
+                "tool_uses": tool_uses or None,
+                "response_id": getattr(result, "id", None),
+                "usage": usage_dict,
+                "elapsed_s": elapsed,
+                "context": ctx,
             }
             record_llm_call({k: v for k, v in payload.items() if v is not None})
         except Exception:
@@ -1163,6 +1230,7 @@ class _FlowceptAnthropicStream:
 
     def __exit__(self, *args):
         import time as _time
+
         result = None
         try:
             result = self._stream.get_final_message()
@@ -1176,6 +1244,7 @@ class _FlowceptAnthropicStream:
 # ---------------------------------------------------------------------------
 # Public plugin class
 # ---------------------------------------------------------------------------
+
 
 class FlowceptLangGraphPlugin:
     """
@@ -1329,8 +1398,7 @@ class FlowceptLangGraphPlugin:
             )
         except Exception as e:
             print(
-                f"[FlowceptLangGraphPlugin] WARNING: failed to start — {e!r}. "
-                "Continuing without provenance capture.",
+                f"[FlowceptLangGraphPlugin] WARNING: failed to start — {e!r}. Continuing without provenance capture.",
                 flush=True,
             )
             _log.exception("FlowceptLangGraphPlugin start failed")
@@ -1346,8 +1414,7 @@ class FlowceptLangGraphPlugin:
             # Just print the perf stats if enabled.
             self._started = False
             print(
-                "[FlowceptLangGraphPlugin] Detached from shared buffer "
-                "(buffer flushed by the owning plugin).",
+                "[FlowceptLangGraphPlugin] Detached from shared buffer (buffer flushed by the owning plugin).",
                 flush=True,
             )
             self._maybe_write_perf_csv()
@@ -1390,7 +1457,6 @@ class FlowceptLangGraphPlugin:
                     flush=True,
                 )
 
-
     def __enter__(self) -> "FlowceptLangGraphPlugin":
         return self.start()
 
@@ -1401,6 +1467,7 @@ class FlowceptLangGraphPlugin:
 # ---------------------------------------------------------------------------
 # Serialisation helper (identical to flowcept_plugin.py)
 # ---------------------------------------------------------------------------
+
 
 def _safe_clip(obj: Any, _depth: int = 0) -> Any:
     """Recursively convert objects to JSON-serialisable form without truncation."""

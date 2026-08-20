@@ -44,6 +44,7 @@ Shared with Academy plugin::
     result = asyncio.run(autogen_plugin.run_team(team, "task"))
     academy_plugin.stop()   # flushes the shared buffer
 """
+
 from __future__ import annotations
 
 import os
@@ -75,6 +76,7 @@ _current_autogen_agent_id: contextvars.ContextVar[str | None] = contextvars.Cont
 # Provenance overhead timer
 # ---------------------------------------------------------------------------
 
+
 class _ProvenanceStats:
     __slots__ = ("_lock", "_counts", "_totals", "_mins", "_maxs", "_raw")
 
@@ -82,8 +84,8 @@ class _ProvenanceStats:
         self._lock: threading.Lock = threading.Lock()
         self._counts: dict[str, int] = {}
         self._totals: dict[str, float] = {}
-        self._mins:   dict[str, float] = {}
-        self._maxs:   dict[str, float] = {}
+        self._mins: dict[str, float] = {}
+        self._maxs: dict[str, float] = {}
         self._raw: list[tuple[str, str, float]] = []
 
     def record(self, category: str, elapsed: float) -> None:
@@ -92,8 +94,8 @@ class _ProvenanceStats:
             if category not in self._counts:
                 self._counts[category] = 0
                 self._totals[category] = 0.0
-                self._mins[category]   = float("inf")
-                self._maxs[category]   = 0.0
+                self._mins[category] = float("inf")
+                self._maxs[category] = 0.0
             self._counts[category] += 1
             self._totals[category] += elapsed
             if elapsed < self._mins[category]:
@@ -104,27 +106,24 @@ class _ProvenanceStats:
 
     def summary(self) -> str:
         col = 22
-        header = (
-            f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} "
-            f"{'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
-        )
+        header = f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} {'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
         sep = "-" * len(header)
         rows = [header, sep]
         with self._lock:
             for cat in sorted(self._counts):
-                n     = self._counts[cat]
+                n = self._counts[cat]
                 total = self._totals[cat]
-                mean  = (total / n) if n else 0.0
-                mn    = self._mins.get(cat, 0.0)
-                mx    = self._maxs.get(cat, 0.0)
+                mean = (total / n) if n else 0.0
+                mn = self._mins.get(cat, 0.0)
+                mx = self._maxs.get(cat, 0.0)
                 rows.append(
-                    f"{cat:<{col}} {n:>7} {total*1e3:>11.3f} "
-                    f"{mean*1e6:>9.1f} {mn*1e6:>8.1f} {mx*1e6:>8.1f}"
+                    f"{cat:<{col}} {n:>7} {total * 1e3:>11.3f} {mean * 1e6:>9.1f} {mn * 1e6:>8.1f} {mx * 1e6:>8.1f}"
                 )
         return "\n".join(rows)
 
     def to_csv(self, path: str, workflow_id: str | None = None) -> None:
         import csv
+
         write_header = not os.path.exists(path)
         with self._lock:
             raw_snapshot = list(self._raw)
@@ -132,9 +131,9 @@ class _ProvenanceStats:
         rows = [
             {
                 "timestamp_utc": ts,
-                "workflow_id":   wf,
-                "category":      cat,
-                "elapsed_us":    round(elapsed * 1e6, 3),
+                "workflow_id": wf,
+                "category": cat,
+                "elapsed_us": round(elapsed * 1e6, 3),
             }
             for ts, cat, elapsed in raw_snapshot
         ]
@@ -149,6 +148,7 @@ class _ProvenanceStats:
 # ---------------------------------------------------------------------------
 # Standalone interceptor wrapper
 # ---------------------------------------------------------------------------
+
 
 class _AutoGenInterceptor:
     """Standalone FlowCept interceptor for AutoGen provenance (Dask-style)."""
@@ -190,6 +190,7 @@ class _AutoGenInterceptor:
         if self._interceptor is None:
             return str(uuid.uuid4())
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
         wf.name = team_name
@@ -226,6 +227,7 @@ class _AutoGenInterceptor:
 # ---------------------------------------------------------------------------
 # Provenance stream runner
 # ---------------------------------------------------------------------------
+
 
 def _safe_clip(obj: Any, depth: int = 0) -> Any:
     if depth > 6:
@@ -265,15 +267,14 @@ def _install_autogen_patches() -> None:
         return
     try:
         from autogen_agentchat.agents import AssistantAgent
+
         _orig_assistant_init = AssistantAgent.__init__
 
         def _patched_init(self_agent, *args, **kwargs):
             _orig_assistant_init(self_agent, *args, **kwargs)
             mc = getattr(self_agent, "_model_client", None)
             if mc is not None and not isinstance(mc, FlowceptModelClient):
-                self_agent._model_client = FlowceptModelClient(
-                    mc, agent_name=getattr(self_agent, "name", None)
-                )
+                self_agent._model_client = FlowceptModelClient(mc, agent_name=getattr(self_agent, "name", None))
 
         AssistantAgent.__init__ = _patched_init
         _patches_installed = True
@@ -288,6 +289,7 @@ def _uninstall_autogen_patches() -> None:
         return
     try:
         from autogen_agentchat.agents import AssistantAgent
+
         AssistantAgent.__init__ = _orig_assistant_init
         _orig_assistant_init = None
         _patches_installed = False
@@ -300,17 +302,11 @@ def _ensure_agents_wrapped(team: Any) -> None:
 
     Handles agents created before the plugin was started.
     """
-    participants = (
-        getattr(team, "_participants", None)
-        or getattr(team, "agents", None)
-        or []
-    )
+    participants = getattr(team, "_participants", None) or getattr(team, "agents", None) or []
     for agent in participants:
         mc = getattr(agent, "_model_client", None)
         if mc is not None and not isinstance(mc, FlowceptModelClient):
-            agent._model_client = FlowceptModelClient(
-                mc, agent_name=getattr(agent, "name", None)
-            )
+            agent._model_client = FlowceptModelClient(mc, agent_name=getattr(agent, "name", None))
 
 
 async def _run_with_provenance(
@@ -333,9 +329,9 @@ async def _run_with_provenance(
     # Wrap any pre-existing agents' model clients (created before plugin start)
     _ensure_agents_wrapped(team)
 
-    group_id    = str(uuid.uuid4())
+    group_id = str(uuid.uuid4())
     run_task_id = str(uuid.uuid4())
-    run_start   = time.time()
+    run_start = time.time()
 
     # Emit a sub-WorkflowObject for this team run
     with _timed("send_graph_workflow"):
@@ -363,9 +359,9 @@ async def _run_with_provenance(
             else:
                 # Each item is a BaseChatMessage or BaseAgentEvent
                 msg_task_id = str(uuid.uuid4())
-                source      = getattr(item, "source", None) or "unknown"
-                content     = getattr(item, "content", None)
-                msg_type    = type(item).__name__
+                source = getattr(item, "source", None) or "unknown"
+                content = getattr(item, "content", None)
+                msg_type = type(item).__name__
 
                 # Update contextvar so LLM calls within this message are children of it
                 _current_autogen_task_id.set(msg_task_id)
@@ -378,43 +374,45 @@ async def _run_with_provenance(
                     content_clip = _safe_clip(content)
 
                 msg_record: dict = {
-                    "task_id":      msg_task_id,
-                    "subtype":      "autogen_message",
-                    "activity_id":  source,
-                    "group_id":     group_id,
+                    "task_id": msg_task_id,
+                    "subtype": "autogen_message",
+                    "activity_id": source,
+                    "group_id": group_id,
                     "parent_task_id": run_task_id,
-                    "started_at":   time.time(),
-                    "ended_at":     time.time(),
-                    "status":       "FINISHED",
-                    "used":         {"task": task, "agent": source},
-                    "generated":    {"content": content_clip, "message_type": msg_type},
+                    "started_at": time.time(),
+                    "ended_at": time.time(),
+                    "status": "FINISHED",
+                    "used": {"task": task, "agent": source},
+                    "generated": {"content": content_clip, "message_type": msg_type},
                     "custom_metadata": {
-                        "agent_name":   source,
+                        "agent_name": source,
                         "message_type": msg_type,
-                        "framework":    "autogen",
+                        "framework": "autogen",
                     },
                 }
                 interceptor.intercept_task(msg_record)
-                messages_captured.append({
-                    "source":  source,
-                    "content": content_clip[:200] if isinstance(content_clip, str) else content_clip,
-                })
+                messages_captured.append(
+                    {
+                        "source": source,
+                        "content": content_clip[:200] if isinstance(content_clip, str) else content_clip,
+                    }
+                )
                 if stats is not None:
                     stats.record("message_intercept", time.perf_counter() - t0)
 
     except Exception as exc:
         # Emit the run record as ERROR then re-raise
         run_task: dict = {
-            "task_id":     run_task_id,
-            "subtype":     "autogen_run",
+            "task_id": run_task_id,
+            "subtype": "autogen_run",
             "activity_id": team_name,
-            "group_id":    group_id,
-            "started_at":  run_start,
-            "ended_at":    time.time(),
-            "status":      "ERROR",
-            "used":        {"task": task},
-            "generated":   {"messages": messages_captured},
-            "stderr":      str(exc),
+            "group_id": group_id,
+            "started_at": run_start,
+            "ended_at": time.time(),
+            "status": "ERROR",
+            "used": {"task": task},
+            "generated": {"messages": messages_captured},
+            "stderr": str(exc),
             "custom_metadata": custom_meta,
         }
         with _timed("run_emit"):
@@ -435,19 +433,19 @@ async def _run_with_provenance(
     last_msg = messages_captured[-1]["content"] if messages_captured else ""
 
     run_task = {
-        "task_id":     run_task_id,
-        "subtype":     "autogen_run",
+        "task_id": run_task_id,
+        "subtype": "autogen_run",
         "activity_id": team_name,
-        "group_id":    group_id,
-        "started_at":  run_start,
-        "ended_at":    time.time(),
-        "status":      "FINISHED",
-        "used":        {"task": task},
-        "generated":   {
-            "stop_reason":   summary,
+        "group_id": group_id,
+        "started_at": run_start,
+        "ended_at": time.time(),
+        "status": "FINISHED",
+        "used": {"task": task},
+        "generated": {
+            "stop_reason": summary,
             "message_count": msg_count,
-            "last_message":  last_msg,
-            "messages":      messages_captured,
+            "last_message": last_msg,
+            "messages": messages_captured,
         },
         "custom_metadata": custom_meta,
     }
@@ -514,6 +512,7 @@ async def run_team(
         # Plugin not active — run without provenance
         from autogen_agentchat.base import TaskResult
         from autogen_core import CancellationToken
+
         final = None
         async for item in team.run_stream(task=task, cancellation_token=CancellationToken()):
             if isinstance(item, TaskResult):
@@ -556,19 +555,41 @@ def record_llm_call(payload: dict) -> None:
         model = payload.get("model_used") or payload.get("model", "unknown")
 
         used: dict = {}
-        for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
-                  "temperature", "top_p", "max_tokens", "reasoning_effort",
-                  "tools_provided", "tool_choice", "stop_sequences", "top_k",
-                  "thinking_budget_tokens"):
+        for k in (
+            "model",
+            "model_used",
+            "messages",
+            "user_prompt",
+            "system_prompt",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "reasoning_effort",
+            "tools_provided",
+            "tool_choice",
+            "stop_sequences",
+            "top_k",
+            "thinking_budget_tokens",
+        ):
             if k in payload:
                 used[k] = payload[k]
         if payload.get("temperature_suppressed"):
             used["temperature_suppressed"] = True
 
         generated: dict = {}
-        for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
-                  "tool_calls", "tool_uses", "thinking_text",
-                  "system_fingerprint", "response_id", "usage", "elapsed_s"):
+        for k in (
+            "text",
+            "finish_reason",
+            "stop_reason",
+            "stop_sequence",
+            "tool_calls",
+            "tool_uses",
+            "thinking_text",
+            "system_fingerprint",
+            "response_id",
+            "usage",
+            "elapsed_s",
+        ):
             if k in payload:
                 generated[k] = payload[k]
         if "error" in payload:
@@ -576,24 +597,21 @@ def record_llm_call(payload: dict) -> None:
 
         # Propagate agent linkage from contextvars (set by _run_with_provenance)
         parent_task_id = _current_autogen_task_id.get(None)
-        agent_id = (
-            payload.get("context", {}).get("agent_name")
-            or _current_autogen_agent_id.get(None)
-        )
+        agent_id = payload.get("context", {}).get("agent_name") or _current_autogen_agent_id.get(None)
 
         task: dict = {
-            "task_id":      str(_uuid.uuid4()),
-            "subtype":      "llm_call",
-            "activity_id":  model,
-            "started_at":   now - elapsed,
-            "ended_at":     now,
-            "status":       "ERROR" if "error" in payload else "FINISHED",
-            "used":         used,
-            "generated":    generated,
+            "task_id": str(_uuid.uuid4()),
+            "subtype": "llm_call",
+            "activity_id": model,
+            "started_at": now - elapsed,
+            "ended_at": now,
+            "status": "ERROR" if "error" in payload else "FINISHED",
+            "used": used,
+            "generated": generated,
             "custom_metadata": {
-                "model":     model,
+                "model": model,
                 "framework": payload.get("context", {}).get("framework", ""),
-                "context":   payload.get("context", {}),
+                "context": payload.get("context", {}),
             },
         }
         if parent_task_id:
@@ -607,6 +625,7 @@ def record_llm_call(payload: dict) -> None:
 # FlowceptModelClient — wraps any AutoGen ChatCompletionClient to capture
 # full LLM call details (model, temperature, reasoning, usage, response, …)
 # ---------------------------------------------------------------------------
+
 
 class FlowceptModelClient:
     """
@@ -700,11 +719,9 @@ class FlowceptModelClient:
             usage_obj = getattr(result, "usage", None)
             usage: dict = {}
             if usage_obj is not None:
-                usage["prompt_tokens"]     = getattr(usage_obj, "prompt_tokens", 0)
+                usage["prompt_tokens"] = getattr(usage_obj, "prompt_tokens", 0)
                 usage["completion_tokens"] = getattr(usage_obj, "completion_tokens", 0)
-                usage["total_tokens"] = (
-                    usage["prompt_tokens"] + usage["completion_tokens"]
-                )
+                usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
 
             # Extract content
             content = getattr(result, "content", "")
@@ -713,7 +730,7 @@ class FlowceptModelClient:
 
             # Extract messages list for provenance (truncated)
             msgs_clip = []
-            for m in (messages or []):
+            for m in messages or []:
                 if hasattr(m, "model_dump"):
                     msgs_clip.append(m.model_dump())
                 elif hasattr(m, "__dict__"):
@@ -726,20 +743,22 @@ class FlowceptModelClient:
                 ctx["agent_name"] = self._agent_name
             ctx["framework"] = "autogen"
 
-            record_llm_call({
-                "type":          "chat_completion",
-                "model":         model,
-                "messages":      msgs_clip,
-                "temperature":   kwargs.get("temperature"),
-                "top_p":         kwargs.get("top_p"),
-                "max_tokens":    kwargs.get("max_tokens"),
-                "reasoning_effort": kwargs.get("reasoning_effort"),
-                "text":          content,
-                "finish_reason": getattr(result, "finish_reason", None),
-                "usage":         usage,
-                "elapsed_s":     elapsed,
-                "context":       ctx,
-            })
+            record_llm_call(
+                {
+                    "type": "chat_completion",
+                    "model": model,
+                    "messages": msgs_clip,
+                    "temperature": kwargs.get("temperature"),
+                    "top_p": kwargs.get("top_p"),
+                    "max_tokens": kwargs.get("max_tokens"),
+                    "reasoning_effort": kwargs.get("reasoning_effort"),
+                    "text": content,
+                    "finish_reason": getattr(result, "finish_reason", None),
+                    "usage": usage,
+                    "elapsed_s": elapsed,
+                    "context": ctx,
+                }
+            )
         except Exception:
             pass  # never break the agent run due to provenance capture
 
@@ -748,6 +767,7 @@ class FlowceptModelClient:
 # FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
 # capture full provenance for every messages.create / messages.stream call.
 # ---------------------------------------------------------------------------
+
 
 class FlowceptAnthropicClient:
     """
@@ -806,6 +826,7 @@ class _FlowceptAnthropicMessages:
 
     def create(self, **kwargs) -> Any:
         import time as _time
+
         t0 = _time.time()
         result = self._inner.create(**kwargs)
         elapsed = _time.time() - t0
@@ -814,6 +835,7 @@ class _FlowceptAnthropicMessages:
 
     async def async_create(self, **kwargs) -> Any:
         import time as _time
+
         t0 = _time.time()
         result = await self._inner.create(**kwargs)
         elapsed = _time.time() - t0
@@ -822,6 +844,7 @@ class _FlowceptAnthropicMessages:
 
     def stream(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         ctx_mgr = self._inner.stream(**kwargs)
         # Wrap the context manager to capture timing on exit
@@ -842,17 +865,18 @@ class _FlowceptAnthropicMessages:
                 elif btype == "thinking":
                     thinking_text += getattr(block, "thinking", "")
                 elif btype == "tool_use":
-                    tool_uses.append({
-                        "id":    getattr(block, "id", None),
-                        "name":  getattr(block, "name", None),
-                        "input": getattr(block, "input", None),
-                    })
+                    tool_uses.append(
+                        {
+                            "id": getattr(block, "id", None),
+                            "name": getattr(block, "name", None),
+                            "input": getattr(block, "input", None),
+                        }
+                    )
 
             usage = getattr(result, "usage", None)
             usage_dict = {}
             if usage is not None:
-                for attr in ("input_tokens", "output_tokens",
-                             "cache_creation_input_tokens", "cache_read_input_tokens"):
+                for attr in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
                     val = getattr(usage, attr, None)
                     if val is not None:
                         usage_dict[attr] = val
@@ -863,28 +887,28 @@ class _FlowceptAnthropicMessages:
             ctx["framework"] = "autogen"
 
             payload: dict = {
-                "type":              "chat_completion",
-                "model":             model,
-                "model_used":        getattr(result, "model", model),
-                "messages":          kwargs.get("messages"),
-                "system_prompt":     kwargs.get("system"),
-                "max_tokens":        kwargs.get("max_tokens"),
-                "temperature":       kwargs.get("temperature"),
-                "top_p":             kwargs.get("top_p"),
-                "top_k":             kwargs.get("top_k"),
-                "stop_sequences":    kwargs.get("stop_sequences"),
+                "type": "chat_completion",
+                "model": model,
+                "model_used": getattr(result, "model", model),
+                "messages": kwargs.get("messages"),
+                "system_prompt": kwargs.get("system"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"),
+                "top_k": kwargs.get("top_k"),
+                "stop_sequences": kwargs.get("stop_sequences"),
                 "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
-                "tools_provided":    [t.get("name") for t in (kwargs.get("tools") or [])],
-                "tool_choice":       kwargs.get("tool_choice"),
-                "text":              text,
-                "thinking_text":     thinking_text or None,
-                "finish_reason":     getattr(result, "stop_reason", None),
-                "stop_sequence":     getattr(result, "stop_sequence", None),
-                "tool_uses":         tool_uses or None,
-                "response_id":       getattr(result, "id", None),
-                "usage":             usage_dict,
-                "elapsed_s":         elapsed,
-                "context":           ctx,
+                "tools_provided": [t.get("name") for t in (kwargs.get("tools") or [])],
+                "tool_choice": kwargs.get("tool_choice"),
+                "text": text,
+                "thinking_text": thinking_text or None,
+                "finish_reason": getattr(result, "stop_reason", None),
+                "stop_sequence": getattr(result, "stop_sequence", None),
+                "tool_uses": tool_uses or None,
+                "response_id": getattr(result, "id", None),
+                "usage": usage_dict,
+                "elapsed_s": elapsed,
+                "context": ctx,
             }
             record_llm_call({k: v for k, v in payload.items() if v is not None})
         except Exception:
@@ -907,6 +931,7 @@ class _FlowceptAnthropicStream:
 
     def __exit__(self, *args):
         import time as _time
+
         result = None
         try:
             result = self._stream.get_final_message()
@@ -1010,36 +1035,38 @@ def openai_chat(
             for tc in choice.message.tool_calls
         ]
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": messages,
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-        "n": n,
-        "stop": stop,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "seed": seed,
-        "reasoning_effort": reasoning_effort,
-        "response_format": response_format,
-        "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "finish_reason": choice.finish_reason,
-        "tool_calls": tool_calls,
-        "system_fingerprint": getattr(response, "system_fingerprint", None),
-        "response_id": response.id,
-        "created": response.created,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": messages,
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "n": n,
+            "stop": stop,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "seed": seed,
+            "reasoning_effort": reasoning_effort,
+            "response_format": response_format,
+            "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "finish_reason": choice.finish_reason,
+            "tool_calls": tool_calls,
+            "system_fingerprint": getattr(response, "system_fingerprint", None),
+            "response_id": response.id,
+            "created": response.created,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
@@ -1109,44 +1136,47 @@ def anthropic_chat(
 
     usage = response.usage
     usage_dict = {
-        "input_tokens":                  getattr(usage, "input_tokens", None),
-        "output_tokens":                 getattr(usage, "output_tokens", None),
-        "cache_creation_input_tokens":   getattr(usage, "cache_creation_input_tokens", None),
-        "cache_read_input_tokens":       getattr(usage, "cache_read_input_tokens", None),
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
     }
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": req["messages"],
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "top_k": top_k,
-        "stop_sequences": stop_sequences,
-        "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
-        "tools_provided": [t.get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "thinking_text": thinking_text if thinking_text else None,
-        "finish_reason": response.stop_reason,
-        "stop_sequence": response.stop_sequence,
-        "tool_uses": tool_uses if tool_uses else None,
-        "response_id": response.id,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": req["messages"],
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "top_k": top_k,
+            "stop_sequences": stop_sequences,
+            "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
+            "tools_provided": [t.get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "thinking_text": thinking_text if thinking_text else None,
+            "finish_reason": response.stop_reason,
+            "stop_sequence": response.stop_sequence,
+            "tool_uses": tool_uses if tool_uses else None,
+            "response_id": response.id,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
 # ---------------------------------------------------------------------------
 # Public plugin class
 # ---------------------------------------------------------------------------
+
 
 class FlowceptAutoGenPlugin:
     """
@@ -1184,13 +1214,13 @@ class FlowceptAutoGenPlugin:
 
     def __init__(self, config: dict | None = None, _shared_interceptor=None) -> None:
         cfg = config or {}
-        self._enabled:        bool       = cfg.get("enabled", True)
-        self._workflow_name:  str        = cfg.get("workflow_name", "autogen-workflow")
-        self._campaign_id:    str | None = cfg.get("campaign_id", None)
-        self._perf_tracking:  bool       = cfg.get("performance_tracking", True)
-        self._perf_csv:       str | None  = cfg.get("perf_csv", None)
+        self._enabled: bool = cfg.get("enabled", True)
+        self._workflow_name: str = cfg.get("workflow_name", "autogen-workflow")
+        self._campaign_id: str | None = cfg.get("campaign_id", None)
+        self._perf_tracking: bool = cfg.get("performance_tracking", True)
+        self._perf_csv: str | None = cfg.get("perf_csv", None)
         self._shared_interceptor = _shared_interceptor
-        self._interceptor    = _shared_interceptor or _AutoGenInterceptor()
+        self._interceptor = _shared_interceptor or _AutoGenInterceptor()
         self._owns_interceptor: bool = _shared_interceptor is None
         self._stats: _ProvenanceStats | None = None
         self._started = False
@@ -1241,8 +1271,7 @@ class FlowceptAutoGenPlugin:
             )
         except Exception as e:
             print(
-                f"[FlowceptAutoGenPlugin] WARNING: failed to start — {e!r}. "
-                "Continuing without provenance capture.",
+                f"[FlowceptAutoGenPlugin] WARNING: failed to start — {e!r}. Continuing without provenance capture.",
                 flush=True,
             )
             _log.exception("FlowceptAutoGenPlugin start failed")
@@ -1282,6 +1311,7 @@ class FlowceptAutoGenPlugin:
             # plugin not started — run the team without provenance
             from autogen_agentchat.base import TaskResult
             from autogen_core import CancellationToken
+
             results = []
             async for item in team.run_stream(task=task, cancellation_token=CancellationToken()):
                 if isinstance(item, TaskResult):
@@ -1303,8 +1333,7 @@ class FlowceptAutoGenPlugin:
         if not self._owns_interceptor:
             self._started = False
             print(
-                "[FlowceptAutoGenPlugin] Detached from shared buffer "
-                "(flushed by the owning plugin).",
+                "[FlowceptAutoGenPlugin] Detached from shared buffer (flushed by the owning plugin).",
                 flush=True,
             )
             self._maybe_write_perf_csv()

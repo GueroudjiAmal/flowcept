@@ -46,6 +46,7 @@ Or shared with an Academy plugin:
     crew.kickoff()
     academy_plugin.stop()   # flushes the shared buffer
 """
+
 from __future__ import annotations
 
 import os
@@ -62,6 +63,7 @@ _log = logging.getLogger(__name__)
 # Provenance overhead timer (identical to other plugins)
 # ---------------------------------------------------------------------------
 
+
 class _ProvenanceStats:
     __slots__ = ("_lock", "_counts", "_totals", "_mins", "_maxs", "_raw")
 
@@ -69,8 +71,8 @@ class _ProvenanceStats:
         self._lock: threading.Lock = threading.Lock()
         self._counts: dict[str, int] = {}
         self._totals: dict[str, float] = {}
-        self._mins:   dict[str, float] = {}
-        self._maxs:   dict[str, float] = {}
+        self._mins: dict[str, float] = {}
+        self._maxs: dict[str, float] = {}
         self._raw: list[tuple[str, str, float]] = []
 
     def record(self, category: str, elapsed: float) -> None:
@@ -79,8 +81,8 @@ class _ProvenanceStats:
             if category not in self._counts:
                 self._counts[category] = 0
                 self._totals[category] = 0.0
-                self._mins[category]   = float("inf")
-                self._maxs[category]   = 0.0
+                self._mins[category] = float("inf")
+                self._maxs[category] = 0.0
             self._counts[category] += 1
             self._totals[category] += elapsed
             if elapsed < self._mins[category]:
@@ -91,27 +93,24 @@ class _ProvenanceStats:
 
     def summary(self) -> str:
         col = 22
-        header = (
-            f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} "
-            f"{'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
-        )
+        header = f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} {'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
         sep = "-" * len(header)
         rows = [header, sep]
         with self._lock:
             for cat in sorted(self._counts):
-                n     = self._counts[cat]
+                n = self._counts[cat]
                 total = self._totals[cat]
-                mean  = (total / n) if n else 0.0
-                mn    = self._mins.get(cat, 0.0)
-                mx    = self._maxs.get(cat, 0.0)
+                mean = (total / n) if n else 0.0
+                mn = self._mins.get(cat, 0.0)
+                mx = self._maxs.get(cat, 0.0)
                 rows.append(
-                    f"{cat:<{col}} {n:>7} {total*1e3:>11.3f} "
-                    f"{mean*1e6:>9.1f} {mn*1e6:>8.1f} {mx*1e6:>8.1f}"
+                    f"{cat:<{col}} {n:>7} {total * 1e3:>11.3f} {mean * 1e6:>9.1f} {mn * 1e6:>8.1f} {mx * 1e6:>8.1f}"
                 )
         return "\n".join(rows)
 
     def to_csv(self, path: str, workflow_id: str | None = None) -> None:
         import csv
+
         write_header = not os.path.exists(path)
         with self._lock:
             raw_snapshot = list(self._raw)
@@ -119,9 +118,9 @@ class _ProvenanceStats:
         rows = [
             {
                 "timestamp_utc": ts,
-                "workflow_id":   wf,
-                "category":      cat,
-                "elapsed_us":    round(elapsed * 1e6, 3),
+                "workflow_id": wf,
+                "category": cat,
+                "elapsed_us": round(elapsed * 1e6, 3),
             }
             for ts, cat, elapsed in raw_snapshot
         ]
@@ -136,6 +135,7 @@ class _ProvenanceStats:
 # ---------------------------------------------------------------------------
 # CrewAI event listener — uses the native event bus
 # ---------------------------------------------------------------------------
+
 
 class _FlowceptCrewAIListener:
     """
@@ -155,19 +155,19 @@ class _FlowceptCrewAIListener:
         # Buffer: crew_kickoff event_id → {group_id, started_at, task_id, used, ...}
         self._crew_starts: dict[str, dict] = {}
         # crewai task event_id → {task_id, started_at, ...}
-        self._task_starts:  dict[str, dict] = {}
+        self._task_starts: dict[str, dict] = {}
         # agent event_id → {task_id, started_at, ...}
         self._agent_starts: dict[str, dict] = {}
         # llm call_id → {task_id, started_at, ...}
-        self._llm_starts:   dict[str, dict] = {}
+        self._llm_starts: dict[str, dict] = {}
         # tool started_event_id → {task_id, started_at, ...}
-        self._tool_starts:  dict[str, dict] = {}
+        self._tool_starts: dict[str, dict] = {}
         # event_id → group_id for hierarchy linking
-        self._crew_group:   dict[str, str] = {}
+        self._crew_group: dict[str, str] = {}
         # task event_id → FlowCept task_id (so agent can reference it)
-        self._task_fc_id:   dict[str, str] = {}
+        self._task_fc_id: dict[str, str] = {}
         # agent event_id → FlowCept task_id (so llm/tool can reference it)
-        self._agent_fc_id:  dict[str, str] = {}
+        self._agent_fc_id: dict[str, str] = {}
 
     def _record(self, category: str, elapsed: float) -> None:
         if self._stats is not None:
@@ -200,10 +200,10 @@ class _FlowceptCrewAIListener:
     def on_crew_kickoff_started(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
         group_id = str(uuid.uuid4())
-        task_id  = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
         crew_name = getattr(event, "crew_name", None) or "crew"
-        inputs    = self._safe_clip(getattr(event, "inputs", None) or {})
-        event_id  = getattr(event, "event_id", str(uuid.uuid4()))
+        inputs = self._safe_clip(getattr(event, "inputs", None) or {})
+        event_id = getattr(event, "event_id", str(uuid.uuid4()))
 
         # Emit a sub-WorkflowObject for this kickoff so queries can navigate
         # the crew hierarchy
@@ -211,12 +211,12 @@ class _FlowceptCrewAIListener:
         self._crew_group[event_id] = group_id
 
         self._crew_starts[event_id] = {
-            "task_id":     task_id,
-            "subtype":     "crewai_crew",
+            "task_id": task_id,
+            "subtype": "crewai_crew",
             "activity_id": crew_name,
-            "group_id":    group_id,
-            "started_at":  time.time(),
-            "used":        {"inputs": inputs, "crew_name": crew_name},
+            "group_id": group_id,
+            "started_at": time.time(),
+            "used": {"inputs": inputs, "crew_name": crew_name},
             "custom_metadata": {"crew_name": crew_name, "framework": "crewai"},
         }
         self._record("crew_kickoff_started", time.perf_counter() - t0)
@@ -231,11 +231,13 @@ class _FlowceptCrewAIListener:
         output = self._safe_clip(getattr(event, "output", None))
         total_tokens = getattr(event, "total_tokens", None)
 
-        skeleton.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"output": output, "total_tokens": total_tokens},
-        })
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"output": output, "total_tokens": total_tokens},
+            }
+        )
         self._intercept(skeleton)
         # Clean up group mapping
         self._crew_group.pop(started_id, None)
@@ -244,14 +246,16 @@ class _FlowceptCrewAIListener:
 
     def on_crew_kickoff_failed(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", None)
+        event_id = getattr(event, "event_id", None)
         started_id = getattr(event, "started_event_id", None) or event_id
-        skeleton   = self._crew_starts.pop(started_id, {})
-        skeleton.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(getattr(event, "error", "unknown error")),
-        })
+        skeleton = self._crew_starts.pop(started_id, {})
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(getattr(event, "error", "unknown error")),
+            }
+        )
         self._intercept(skeleton)
         self._record("crew_kickoff_failed", time.perf_counter() - t0)
 
@@ -268,25 +272,25 @@ class _FlowceptCrewAIListener:
 
     def on_task_started(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", str(uuid.uuid4()))
-        task_id    = str(uuid.uuid4())
-        task_name  = getattr(event, "task_name", None) or "task"
+        event_id = getattr(event, "event_id", str(uuid.uuid4()))
+        task_id = str(uuid.uuid4())
+        task_name = getattr(event, "task_name", None) or "task"
         agent_role = getattr(event, "agent_role", None) or "unknown"
-        group_id   = self._find_group_id(event)
-        context    = self._safe_clip(getattr(event, "context", None) or {})
-        task_obj   = self._safe_clip(getattr(event, "task", None))
+        group_id = self._find_group_id(event)
+        context = self._safe_clip(getattr(event, "context", None) or {})
+        task_obj = self._safe_clip(getattr(event, "task", None))
 
         self._task_starts[event_id] = {
-            "task_id":     task_id,
-            "subtype":     "crewai_task",
+            "task_id": task_id,
+            "subtype": "crewai_task",
             "activity_id": task_name,
-            "group_id":    group_id,
-            "started_at":  time.time(),
-            "used":        {"context": context, "task": task_obj},
+            "group_id": group_id,
+            "started_at": time.time(),
+            "used": {"context": context, "task": task_obj},
             "custom_metadata": {
-                "task_name":   task_name,
-                "agent_role":  agent_role,
-                "framework":   "crewai",
+                "task_name": task_name,
+                "agent_role": agent_role,
+                "framework": "crewai",
             },
         }
         self._task_fc_id[event_id] = task_id
@@ -294,16 +298,18 @@ class _FlowceptCrewAIListener:
 
     def on_task_completed(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", None)
+        event_id = getattr(event, "event_id", None)
         started_id = getattr(event, "started_event_id", None) or event_id
-        skeleton   = self._task_starts.pop(started_id, None) or self._task_starts.pop(event_id, {})
+        skeleton = self._task_starts.pop(started_id, None) or self._task_starts.pop(event_id, {})
 
         output = self._safe_clip(getattr(event, "output", None))
-        skeleton.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"output": output},
-        })
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"output": output},
+            }
+        )
         self._intercept(skeleton)
         self._task_fc_id.pop(started_id, None)
         self._task_fc_id.pop(event_id, None)
@@ -311,14 +317,16 @@ class _FlowceptCrewAIListener:
 
     def on_task_failed(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", None)
+        event_id = getattr(event, "event_id", None)
         started_id = getattr(event, "started_event_id", None) or event_id
-        skeleton   = self._task_starts.pop(started_id, {})
-        skeleton.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(getattr(event, "error", "unknown")),
-        })
+        skeleton = self._task_starts.pop(started_id, {})
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(getattr(event, "error", "unknown")),
+            }
+        )
         self._intercept(skeleton)
         self._record("task_failed", time.perf_counter() - t0)
 
@@ -326,51 +334,49 @@ class _FlowceptCrewAIListener:
 
     def on_agent_execution_started(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", str(uuid.uuid4()))
-        task_id    = str(uuid.uuid4())
-        agent      = getattr(event, "agent", None)
-        agent_role = getattr(event, "agent_role", None) or (
-            getattr(agent, "role", None) if agent else None
-        ) or "agent"
-        group_id   = self._find_group_id(event)
+        event_id = getattr(event, "event_id", str(uuid.uuid4()))
+        task_id = str(uuid.uuid4())
+        agent = getattr(event, "agent", None)
+        agent_role = getattr(event, "agent_role", None) or (getattr(agent, "role", None) if agent else None) or "agent"
+        group_id = self._find_group_id(event)
         task_prompt = self._safe_clip(getattr(event, "task_prompt", None) or "")
-        tools      = self._safe_clip([
-            getattr(t, "name", str(t)) for t in (getattr(event, "tools", None) or [])
-        ])
+        tools = self._safe_clip([getattr(t, "name", str(t)) for t in (getattr(event, "tools", None) or [])])
         # Link to enclosing task's FlowCept task_id
         task_evt_id = getattr(event, "started_event_id", None) or getattr(event, "task_id", None)
         parent_task_id = self._task_fc_id.get(task_evt_id) if task_evt_id else None
 
         skeleton: dict = {
-            "task_id":     task_id,
-            "subtype":     "crewai_agent",
+            "task_id": task_id,
+            "subtype": "crewai_agent",
             "activity_id": agent_role,
-            "group_id":    group_id,
-            "started_at":  time.time(),
-            "used":        {"task_prompt": task_prompt, "tools": tools},
+            "group_id": group_id,
+            "started_at": time.time(),
+            "used": {"task_prompt": task_prompt, "tools": tools},
             "custom_metadata": {
                 "agent_role": agent_role,
-                "framework":  "crewai",
+                "framework": "crewai",
             },
         }
         if parent_task_id:
             skeleton["parent_task_id"] = parent_task_id
         self._agent_starts[event_id] = skeleton
-        self._agent_fc_id[event_id]  = task_id
+        self._agent_fc_id[event_id] = task_id
         self._record("agent_started", time.perf_counter() - t0)
 
     def on_agent_execution_completed(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", None)
+        event_id = getattr(event, "event_id", None)
         started_id = getattr(event, "started_event_id", None) or event_id
-        skeleton   = self._agent_starts.pop(started_id, None) or self._agent_starts.pop(event_id, {})
+        skeleton = self._agent_starts.pop(started_id, None) or self._agent_starts.pop(event_id, {})
 
         output = self._safe_clip(getattr(event, "output", None))
-        skeleton.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"output": output},
-        })
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"output": output},
+            }
+        )
         self._intercept(skeleton)
         self._agent_fc_id.pop(started_id, None)
         self._agent_fc_id.pop(event_id, None)
@@ -378,14 +384,16 @@ class _FlowceptCrewAIListener:
 
     def on_agent_execution_error(self, source: Any, event: Any) -> None:
         t0 = time.perf_counter()
-        event_id   = getattr(event, "event_id", None)
+        event_id = getattr(event, "event_id", None)
         started_id = getattr(event, "started_event_id", None) or event_id
-        skeleton   = self._agent_starts.pop(started_id, {})
-        skeleton.update({
-            "ended_at": time.time(),
-            "status":   "ERROR",
-            "stderr":   str(getattr(event, "error", "unknown")),
-        })
+        skeleton = self._agent_starts.pop(started_id, {})
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "ERROR",
+                "stderr": str(getattr(event, "error", "unknown")),
+            }
+        )
         self._intercept(skeleton)
         self._record("agent_error", time.perf_counter() - t0)
 
@@ -403,9 +411,15 @@ def _build_listener_class(interceptor: Any, stats: _ProvenanceStats | None):
     """
     from crewai.events.base_event_listener import BaseEventListener
     from crewai.events.event_types import (
-        CrewKickoffStartedEvent, CrewKickoffCompletedEvent, CrewKickoffFailedEvent,
-        TaskStartedEvent, TaskCompletedEvent, TaskFailedEvent,
-        AgentExecutionStartedEvent, AgentExecutionCompletedEvent, AgentExecutionErrorEvent,
+        CrewKickoffStartedEvent,
+        CrewKickoffCompletedEvent,
+        CrewKickoffFailedEvent,
+        TaskStartedEvent,
+        TaskCompletedEvent,
+        TaskFailedEvent,
+        AgentExecutionStartedEvent,
+        AgentExecutionCompletedEvent,
+        AgentExecutionErrorEvent,
     )
 
     _listener = _FlowceptCrewAIListener(interceptor, stats)
@@ -428,6 +442,7 @@ def _build_listener_class(interceptor: Any, stats: _ProvenanceStats | None):
 # ---------------------------------------------------------------------------
 # Hook-based LLM + Tool provenance (richer than event bus events)
 # ---------------------------------------------------------------------------
+
 
 class _FlowceptCrewAIHooks:
     """
@@ -458,7 +473,7 @@ class _FlowceptCrewAIHooks:
         # Keyed by id(context.executor): before hook stores skeleton,
         # after hook pops and emits.  CrewAI creates new context objects for
         # each hook invocation so the context itself cannot be used as scratchpad.
-        self._pending_llm:  dict[int, dict] = {}
+        self._pending_llm: dict[int, dict] = {}
         self._pending_tool: dict[int, dict] = {}
 
     def _record(self, category: str, elapsed: float) -> None:
@@ -473,21 +488,17 @@ class _FlowceptCrewAIHooks:
     def before_llm_call(self, context: Any) -> None:
         """Buffers the LLM call start skeleton; matched by after_llm_call."""
         t0 = time.perf_counter()
-        task_id  = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
         group_id = self._listener._find_group_id(None)
 
         # Rich context from the hook
-        agent       = getattr(context, "agent", None)
-        task_obj    = getattr(context, "task", None)
-        llm         = getattr(context, "llm", None)
-        messages    = getattr(context, "messages", [])
-        iterations  = getattr(context, "iterations", 0)
+        agent = getattr(context, "agent", None)
+        task_obj = getattr(context, "task", None)
+        llm = getattr(context, "llm", None)
+        messages = getattr(context, "messages", [])
+        iterations = getattr(context, "iterations", 0)
 
-        model = (
-            getattr(llm, "model", None)
-            or getattr(llm, "model_name", None)
-            or "unknown"
-        )
+        model = getattr(llm, "model", None) or getattr(llm, "model_name", None) or "unknown"
         agent_role = getattr(agent, "role", None) or "unknown"
 
         # Retrieve enclosing agent's FlowCept task_id for parent linkage
@@ -495,35 +506,32 @@ class _FlowceptCrewAIHooks:
         parent_task_id = next(iter(self._listener._agent_fc_id.values()), None) if self._listener._agent_fc_id else None
 
         serialized_messages = self._safe_clip(
-            [{"role": getattr(m, "role", "user"), "content": getattr(m, "content", str(m))}
-             for m in messages]
+            [{"role": getattr(m, "role", "user"), "content": getattr(m, "content", str(m))} for m in messages]
             if messages and hasattr(messages[0], "role")
             else messages
         )
 
         used: dict = {
-            "messages":        serialized_messages,
-            "model":           model,
-            "iterations":      iterations,
-            "agent_role":      agent_role,
-            "agent_goal":      self._safe_clip(getattr(agent, "goal", None)),
-            "task_description": self._safe_clip(
-                getattr(task_obj, "description", None)
-            ),
+            "messages": serialized_messages,
+            "model": model,
+            "iterations": iterations,
+            "agent_role": agent_role,
+            "agent_goal": self._safe_clip(getattr(agent, "goal", None)),
+            "task_description": self._safe_clip(getattr(task_obj, "description", None)),
         }
 
         skeleton: dict = {
-            "task_id":     task_id,
-            "subtype":     "llm_call",
+            "task_id": task_id,
+            "subtype": "llm_call",
             "activity_id": model,
-            "group_id":    group_id,
-            "started_at":  time.time(),
-            "used":        used,
+            "group_id": group_id,
+            "started_at": time.time(),
+            "used": used,
             "custom_metadata": {
-                "model":      model,
+                "model": model,
                 "agent_role": agent_role,
-                "framework":  "crewai",
-                "source":     "llm_hook",
+                "framework": "crewai",
+                "source": "llm_hook",
             },
         }
         if parent_task_id:
@@ -543,15 +551,17 @@ class _FlowceptCrewAIHooks:
         t0 = time.perf_counter()
         key = id(getattr(context, "executor", context))
         skeleton: dict = self._pending_llm.pop(key, {})
-        response  = getattr(context, "response", None) or ""
-        skeleton.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {
-                "response": response[:4000] if isinstance(response, str) else self._safe_clip(response),
-                "model":    skeleton.get("activity_id", "unknown"),
-            },
-        })
+        response = getattr(context, "response", None) or ""
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {
+                    "response": response[:4000] if isinstance(response, str) else self._safe_clip(response),
+                    "model": skeleton.get("activity_id", "unknown"),
+                },
+            }
+        )
         self._interceptor.intercept_task(skeleton)
         self._record("llm_hook_after", time.perf_counter() - t0)
 
@@ -560,32 +570,32 @@ class _FlowceptCrewAIHooks:
     def before_tool_call(self, context: Any) -> None:
         """Buffers the tool call start skeleton."""
         t0 = time.perf_counter()
-        task_id   = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
         tool_name = getattr(context, "tool_name", None) or "tool"
-        group_id  = self._listener._find_group_id(None)
+        group_id = self._listener._find_group_id(None)
 
-        agent    = getattr(context, "agent", None)
+        agent = getattr(context, "agent", None)
         task_obj = getattr(context, "task", None)
         agent_role = getattr(agent, "role", None) or "unknown"
 
         parent_task_id = next(iter(self._listener._agent_fc_id.values()), None) if self._listener._agent_fc_id else None
 
         skeleton: dict = {
-            "task_id":     task_id,
-            "subtype":     "tool_call",
+            "task_id": task_id,
+            "subtype": "tool_call",
             "activity_id": tool_name,
-            "group_id":    group_id,
-            "started_at":  time.time(),
-            "used":        {
-                "input":           self._safe_clip(getattr(context, "tool_input", {})),
-                "agent_role":      agent_role,
+            "group_id": group_id,
+            "started_at": time.time(),
+            "used": {
+                "input": self._safe_clip(getattr(context, "tool_input", {})),
+                "agent_role": agent_role,
                 "task_description": self._safe_clip(getattr(task_obj, "description", None)),
             },
             "custom_metadata": {
-                "tool_name":  tool_name,
+                "tool_name": tool_name,
                 "agent_role": agent_role,
-                "framework":  "crewai",
-                "source":     "tool_hook",
+                "framework": "crewai",
+                "source": "tool_hook",
             },
         }
         if parent_task_id:
@@ -603,11 +613,13 @@ class _FlowceptCrewAIHooks:
         key = id(getattr(context, "executor", context))
         skeleton: dict = self._pending_tool.pop(key, {})
         result = getattr(context, "tool_result", None) or ""
-        skeleton.update({
-            "ended_at":  time.time(),
-            "status":    "FINISHED",
-            "generated": {"output": result[:2000] if isinstance(result, str) else self._safe_clip(result)},
-        })
+        skeleton.update(
+            {
+                "ended_at": time.time(),
+                "status": "FINISHED",
+                "generated": {"output": result[:2000] if isinstance(result, str) else self._safe_clip(result)},
+            }
+        )
         self._interceptor.intercept_task(skeleton)
         self._record("tool_hook_after", time.perf_counter() - t0)
 
@@ -615,6 +627,7 @@ class _FlowceptCrewAIHooks:
 # ---------------------------------------------------------------------------
 # Shared interceptor wrapper (re-uses AcademyInterceptor when available)
 # ---------------------------------------------------------------------------
+
 
 class _CrewAIInterceptor:
     """Standalone interceptor for CrewAI provenance (Dask-style)."""
@@ -656,6 +669,7 @@ class _CrewAIInterceptor:
         if self._interceptor is None:
             return str(uuid.uuid4())
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
         wf.name = name
@@ -728,37 +742,59 @@ def record_llm_call(payload: dict) -> None:
         model = payload.get("model_used") or payload.get("model", "unknown")
 
         used: dict = {}
-        for k in ("model", "model_used", "messages", "user_prompt", "system_prompt",
-                  "temperature", "top_p", "max_tokens", "reasoning_effort",
-                  "tools_provided", "tool_choice", "stop_sequences", "top_k",
-                  "thinking_budget_tokens"):
+        for k in (
+            "model",
+            "model_used",
+            "messages",
+            "user_prompt",
+            "system_prompt",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "reasoning_effort",
+            "tools_provided",
+            "tool_choice",
+            "stop_sequences",
+            "top_k",
+            "thinking_budget_tokens",
+        ):
             if k in payload:
                 used[k] = payload[k]
         if payload.get("temperature_suppressed"):
             used["temperature_suppressed"] = True
 
         generated: dict = {}
-        for k in ("text", "finish_reason", "stop_reason", "stop_sequence",
-                  "tool_calls", "tool_uses", "thinking_text",
-                  "system_fingerprint", "response_id", "usage", "elapsed_s"):
+        for k in (
+            "text",
+            "finish_reason",
+            "stop_reason",
+            "stop_sequence",
+            "tool_calls",
+            "tool_uses",
+            "thinking_text",
+            "system_fingerprint",
+            "response_id",
+            "usage",
+            "elapsed_s",
+        ):
             if k in payload:
                 generated[k] = payload[k]
         if "error" in payload:
             generated["error"] = str(payload["error"])
 
         task: dict = {
-            "task_id":      str(_uuid.uuid4()),
-            "subtype":      "llm_call",
-            "activity_id":  model,
-            "started_at":   now - elapsed,
-            "ended_at":     now,
-            "status":       "ERROR" if "error" in payload else "FINISHED",
-            "used":         used,
-            "generated":    generated,
+            "task_id": str(_uuid.uuid4()),
+            "subtype": "llm_call",
+            "activity_id": model,
+            "started_at": now - elapsed,
+            "ended_at": now,
+            "status": "ERROR" if "error" in payload else "FINISHED",
+            "used": used,
+            "generated": generated,
             "custom_metadata": {
-                "model":     model,
+                "model": model,
                 "framework": payload.get("context", {}).get("framework", ""),
-                "context":   payload.get("context", {}),
+                "context": payload.get("context", {}),
             },
         }
         interceptor.intercept_task(task)
@@ -856,36 +892,38 @@ def openai_chat(
             for tc in choice.message.tool_calls
         ]
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": messages,
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-        "n": n,
-        "stop": stop,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "seed": seed,
-        "reasoning_effort": reasoning_effort,
-        "response_format": response_format,
-        "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "finish_reason": choice.finish_reason,
-        "tool_calls": tool_calls,
-        "system_fingerprint": getattr(response, "system_fingerprint", None),
-        "response_id": response.id,
-        "created": response.created,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": messages,
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "n": n,
+            "stop": stop,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "seed": seed,
+            "reasoning_effort": reasoning_effort,
+            "response_format": response_format,
+            "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "finish_reason": choice.finish_reason,
+            "tool_calls": tool_calls,
+            "system_fingerprint": getattr(response, "system_fingerprint", None),
+            "response_id": response.id,
+            "created": response.created,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
@@ -955,38 +993,40 @@ def anthropic_chat(
 
     usage = response.usage
     usage_dict = {
-        "input_tokens":                  getattr(usage, "input_tokens", None),
-        "output_tokens":                 getattr(usage, "output_tokens", None),
-        "cache_creation_input_tokens":   getattr(usage, "cache_creation_input_tokens", None),
-        "cache_read_input_tokens":       getattr(usage, "cache_read_input_tokens", None),
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
     }
 
-    record_llm_call({
-        "type": "chat_completion",
-        "model": model,
-        "model_used": response.model,
-        "messages": req["messages"],
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "top_k": top_k,
-        "stop_sequences": stop_sequences,
-        "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
-        "tools_provided": [t.get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        "text": text,
-        "thinking_text": thinking_text if thinking_text else None,
-        "finish_reason": response.stop_reason,
-        "stop_sequence": response.stop_sequence,
-        "tool_uses": tool_uses if tool_uses else None,
-        "response_id": response.id,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            "model": model,
+            "model_used": response.model,
+            "messages": req["messages"],
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "top_k": top_k,
+            "stop_sequences": stop_sequences,
+            "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
+            "tools_provided": [t.get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            "text": text,
+            "thinking_text": thinking_text if thinking_text else None,
+            "finish_reason": response.stop_reason,
+            "stop_sequence": response.stop_sequence,
+            "tool_uses": tool_uses if tool_uses else None,
+            "response_id": response.id,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            "context": context or {},
+        }
+    )
     return text
 
 
@@ -994,6 +1034,7 @@ def anthropic_chat(
 # FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
 # capture full provenance for every messages.create / messages.stream call.
 # ---------------------------------------------------------------------------
+
 
 class FlowceptAnthropicClient:
     """
@@ -1035,6 +1076,7 @@ class _FlowceptAnthropicMessages:
 
     def create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1042,6 +1084,7 @@ class _FlowceptAnthropicMessages:
 
     async def async_create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = await self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1049,6 +1092,7 @@ class _FlowceptAnthropicMessages:
 
     def stream(self, **kwargs):
         import time as _time
+
         return _FlowceptAnthropicStream(self._inner.stream(**kwargs), kwargs, self._record, _time.time())
 
     def _record(self, kwargs, result, elapsed):
@@ -1064,26 +1108,53 @@ class _FlowceptAnthropicMessages:
                 elif btype == "thinking":
                     thinking_text += getattr(block, "thinking", "")
                 elif btype == "tool_use":
-                    tool_uses.append({"id": getattr(block, "id", None), "name": getattr(block, "name", None), "input": getattr(block, "input", None)})
+                    tool_uses.append(
+                        {
+                            "id": getattr(block, "id", None),
+                            "name": getattr(block, "name", None),
+                            "input": getattr(block, "input", None),
+                        }
+                    )
             usage = getattr(result, "usage", None)
-            usage_dict = {attr: getattr(usage, attr, None) for attr in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")} if usage else {}
+            usage_dict = (
+                {
+                    attr: getattr(usage, attr, None)
+                    for attr in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                    )
+                }
+                if usage
+                else {}
+            )
             ctx = dict(self._context)
             if self._agent_name:
                 ctx["agent_name"] = self._agent_name
             payload = {
-                "type": "chat_completion", "model": model, "model_used": getattr(result, "model", model),
-                "messages": kwargs.get("messages"), "system_prompt": kwargs.get("system"),
-                "max_tokens": kwargs.get("max_tokens"), "temperature": kwargs.get("temperature"),
-                "top_p": kwargs.get("top_p"), "top_k": kwargs.get("top_k"),
+                "type": "chat_completion",
+                "model": model,
+                "model_used": getattr(result, "model", model),
+                "messages": kwargs.get("messages"),
+                "system_prompt": kwargs.get("system"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"),
+                "top_k": kwargs.get("top_k"),
                 "stop_sequences": kwargs.get("stop_sequences"),
                 "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
                 "tools_provided": [t.get("name") for t in (kwargs.get("tools") or [])],
                 "tool_choice": kwargs.get("tool_choice"),
-                "text": text, "thinking_text": thinking_text or None,
+                "text": text,
+                "thinking_text": thinking_text or None,
                 "finish_reason": getattr(result, "stop_reason", None),
                 "stop_sequence": getattr(result, "stop_sequence", None),
-                "tool_uses": tool_uses or None, "response_id": getattr(result, "id", None),
-                "usage": usage_dict, "elapsed_s": elapsed, "context": ctx,
+                "tool_uses": tool_uses or None,
+                "response_id": getattr(result, "id", None),
+                "usage": usage_dict,
+                "elapsed_s": elapsed,
+                "context": ctx,
             }
             record_llm_call({k: v for k, v in payload.items() if v is not None})
         except Exception:
@@ -1104,6 +1175,7 @@ class _FlowceptAnthropicStream:
 
     def __exit__(self, *args):
         import time as _time
+
         result = None
         try:
             result = self._stream.get_final_message()
@@ -1117,6 +1189,7 @@ class _FlowceptAnthropicStream:
 # ---------------------------------------------------------------------------
 # Public plugin class
 # ---------------------------------------------------------------------------
+
 
 class FlowceptCrewAIPlugin:
     """
@@ -1153,26 +1226,29 @@ class FlowceptCrewAIPlugin:
 
     def __init__(self, config: dict | None = None, _shared_interceptor=None) -> None:
         cfg = config or {}
-        self._enabled:        bool      = cfg.get("enabled", True)
-        self._workflow_name:  str       = cfg.get("workflow_name", "crewai-workflow")
-        self._campaign_id:    str | None = cfg.get("campaign_id", None)
-        self._perf_tracking:  bool      = cfg.get("performance_tracking", True)
-        self._perf_csv:       str | None = cfg.get("perf_csv", None)
+        self._enabled: bool = cfg.get("enabled", True)
+        self._workflow_name: str = cfg.get("workflow_name", "crewai-workflow")
+        self._campaign_id: str | None = cfg.get("campaign_id", None)
+        self._perf_tracking: bool = cfg.get("performance_tracking", True)
+        self._perf_csv: str | None = cfg.get("perf_csv", None)
         self._shared_interceptor = _shared_interceptor
-        self._interceptor    = _shared_interceptor or _CrewAIInterceptor()
+        self._interceptor = _shared_interceptor or _CrewAIInterceptor()
         self._owns_interceptor: bool = _shared_interceptor is None
         self._stats: _ProvenanceStats | None = None
         self._listener_obj: _FlowceptCrewAIListener | None = None
-        self._hooks_obj:    _FlowceptCrewAIHooks   | None = None
-        self._started  = False
+        self._hooks_obj: _FlowceptCrewAIHooks | None = None
+        self._started = False
 
     def _register_hooks(self) -> None:
         from crewai.hooks.llm_hooks import (
-            register_before_llm_call_hook, register_after_llm_call_hook,
+            register_before_llm_call_hook,
+            register_after_llm_call_hook,
         )
         from crewai.hooks.tool_hooks import (
-            register_before_tool_call_hook, register_after_tool_call_hook,
+            register_before_tool_call_hook,
+            register_after_tool_call_hook,
         )
+
         register_before_llm_call_hook(self._hooks_obj.before_llm_call)
         register_after_llm_call_hook(self._hooks_obj.after_llm_call)
         register_before_tool_call_hook(self._hooks_obj.before_tool_call)
@@ -1183,11 +1259,14 @@ class FlowceptCrewAIPlugin:
             return
         try:
             from crewai.hooks.llm_hooks import (
-                unregister_before_llm_call_hook, unregister_after_llm_call_hook,
+                unregister_before_llm_call_hook,
+                unregister_after_llm_call_hook,
             )
             from crewai.hooks.tool_hooks import (
-                unregister_before_tool_call_hook, unregister_after_tool_call_hook,
+                unregister_before_tool_call_hook,
+                unregister_after_tool_call_hook,
             )
+
             unregister_before_llm_call_hook(self._hooks_obj.before_llm_call)
             unregister_after_llm_call_hook(self._hooks_obj.after_llm_call)
             unregister_before_tool_call_hook(self._hooks_obj.before_tool_call)
@@ -1250,8 +1329,7 @@ class FlowceptCrewAIPlugin:
             )
         except Exception as e:
             print(
-                f"[FlowceptCrewAIPlugin] WARNING: failed to start — {e!r}. "
-                "Continuing without provenance capture.",
+                f"[FlowceptCrewAIPlugin] WARNING: failed to start — {e!r}. Continuing without provenance capture.",
                 flush=True,
             )
             _log.exception("FlowceptCrewAIPlugin start failed")
@@ -1265,8 +1343,7 @@ class FlowceptCrewAIPlugin:
         if not self._owns_interceptor:
             self._started = False
             print(
-                "[FlowceptCrewAIPlugin] Detached from shared buffer "
-                "(flushed by the owning plugin).",
+                "[FlowceptCrewAIPlugin] Detached from shared buffer (flushed by the owning plugin).",
                 flush=True,
             )
             self._maybe_write_perf_csv()

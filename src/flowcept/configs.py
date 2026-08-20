@@ -302,11 +302,8 @@ MCP_ALLOWED_ORIGINS = _get_env_list(
 ####################
 # PLUGINS          #
 ####################
-if USE_DEFAULT:
-    PLUGINS = dict(settings.get("plugins", {}))
-else:
-    _plugins_raw = settings.get("plugins", {})
-    PLUGINS = OmegaConf.to_container(_plugins_raw, resolve=True) if _plugins_raw else {}
+# Settings are already resolved to plain containers at load time.
+PLUGINS = dict(settings.get("plugins", {}) or {})
 
 ####################
 # Enabled ADAPTERS #

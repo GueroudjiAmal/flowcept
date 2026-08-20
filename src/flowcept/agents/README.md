@@ -131,6 +131,7 @@ code needed; tool calls are stored automatically when the interceptor is running
 
 ```python
 from flowcept.instrumentation.flowcept_agent_task import FlowceptLLM
+
 wrapped = FlowceptLLM(llm, agent_id=my_agent_id)
 response = wrapped.invoke("How many tasks failed?")
 ```

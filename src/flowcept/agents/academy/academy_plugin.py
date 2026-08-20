@@ -71,6 +71,7 @@ from typing import Any
 # Provenance overhead timer
 # ---------------------------------------------------------------------------
 
+
 class _ProvenanceStats:
     """
     Lightweight thread-safe accumulator for provenance capture timings.
@@ -95,8 +96,8 @@ class _ProvenanceStats:
         self._lock: threading.Lock = threading.Lock()
         self._counts: dict[str, int] = {}
         self._totals: dict[str, float] = {}
-        self._mins:   dict[str, float] = {}
-        self._maxs:   dict[str, float] = {}
+        self._mins: dict[str, float] = {}
+        self._maxs: dict[str, float] = {}
         # Raw per-event buffer: list of (timestamp_utc, category, elapsed_s)
         self._raw: list[tuple[str, str, float]] = []
 
@@ -107,8 +108,8 @@ class _ProvenanceStats:
             if category not in self._counts:
                 self._counts[category] = 0
                 self._totals[category] = 0.0
-                self._mins[category]   = float("inf")
-                self._maxs[category]   = 0.0
+                self._mins[category] = float("inf")
+                self._maxs[category] = 0.0
             self._counts[category] += 1
             self._totals[category] += elapsed
             if elapsed < self._mins[category]:
@@ -120,22 +121,18 @@ class _ProvenanceStats:
     def summary(self) -> str:
         """Return a formatted table of all recorded categories."""
         col = 22
-        header = (
-            f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} "
-            f"{'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
-        )
+        header = f"{'Category':<{col}} {'N':>7} {'Total(ms)':>11} {'Mean(µs)':>9} {'Min(µs)':>8} {'Max(µs)':>8}"
         sep = "-" * len(header)
         rows = [header, sep]
         with self._lock:
             for cat in sorted(self._counts):
-                n     = self._counts[cat]
+                n = self._counts[cat]
                 total = self._totals[cat]
-                mean  = (total / n) if n else 0.0
-                mn    = self._mins.get(cat, 0.0)
-                mx    = self._maxs.get(cat, 0.0)
+                mean = (total / n) if n else 0.0
+                mn = self._mins.get(cat, 0.0)
+                mx = self._maxs.get(cat, 0.0)
                 rows.append(
-                    f"{cat:<{col}} {n:>7} {total*1e3:>11.3f} "
-                    f"{mean*1e6:>9.1f} {mn*1e6:>8.1f} {mx*1e6:>8.1f}"
+                    f"{cat:<{col}} {n:>7} {total * 1e3:>11.3f} {mean * 1e6:>9.1f} {mn * 1e6:>8.1f} {mx * 1e6:>8.1f}"
                 )
         return "\n".join(rows)
 
@@ -160,9 +157,9 @@ class _ProvenanceStats:
         rows = [
             {
                 "timestamp_utc": ts,
-                "workflow_id":   wf,
-                "category":      cat,
-                "elapsed_us":    round(elapsed * 1e6, 3),
+                "workflow_id": wf,
+                "category": cat,
+                "elapsed_us": round(elapsed * 1e6, 3),
             }
             for ts, cat, elapsed in raw_snapshot
         ]
@@ -197,6 +194,7 @@ def _timed(category: str):
         if _PROV_STATS is not None:
             _PROV_STATS.record(category, time.perf_counter() - t0)
 
+
 _log = logging.getLogger(__name__)
 
 # ContextVar: holds the task_id of the currently-executing Academy action (or
@@ -213,17 +211,20 @@ _current_academy_agent_id: contextvars.ContextVar[str | None] = contextvars.Cont
 )
 
 # LLM payload types that carry a complete request+response pair.
-_CAPTURE_LLM_TYPES = frozenset({
-    "parsed_json_result",
-    "chat_completion",
-    "embed_result_local",
-    "embed_result_openai",
-})
+_CAPTURE_LLM_TYPES = frozenset(
+    {
+        "parsed_json_result",
+        "chat_completion",
+        "embed_result_local",
+        "embed_result_openai",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # Academy interceptor — manages BaseInterceptor directly (Dask-style)
 # ---------------------------------------------------------------------------
+
 
 class AcademyInterceptor:
     """
@@ -303,6 +304,7 @@ class AcademyInterceptor:
         if self._interceptor is None:
             return str(uuid.uuid4())
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
         wf.name = f"{agent_type}:{agent_id}"
@@ -323,6 +325,7 @@ class AcademyInterceptor:
         if self._interceptor is None:
             return str(uuid.uuid4())
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
+
         wf = WorkflowObject()
         wf.workflow_id = str(uuid.uuid4())
         wf.name = graph_name
@@ -366,7 +369,7 @@ class AcademyInterceptor:
 _PATCHER_INSTALLED: bool = False
 _ACTIVE_INTERCEPTOR: AcademyInterceptor | None = None
 _ORIG_PPE_INIT = None  # holds the original ProcessPoolExecutor.__init__ while patched
-_PERF_CSV_PATH: str | None = None   # set by plugin.start(); forwarded to workers via initargs
+_PERF_CSV_PATH: str | None = None  # set by plugin.start(); forwarded to workers via initargs
 _WORKER_PERF_CSV: str | None = None  # set inside each worker by _worker_init
 
 # Per-agent sub-workflow IDs  {agent_id_str -> sub_workflow_id}
@@ -381,8 +384,8 @@ _AGENT_ID_TO_TYPE: dict[str, str] = {}
 # Process-pool support — picklable worker initializer + executor factory
 # ---------------------------------------------------------------------------
 
-def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool,
-                 perf_csv: str | None = None) -> None:
+
+def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool, perf_csv: str | None = None) -> None:
     """
     ``ProcessPoolExecutor`` initializer for Flowcept provenance capture.
 
@@ -395,6 +398,7 @@ def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool,
     Do not call directly — use ``make_process_executor()`` instead.
     """
     import atexit
+
     global _ACTIVE_INTERCEPTOR, _PROV_STATS, _WORKER_PERF_CSV
     _WORKER_PERF_CSV = perf_csv
     try:
@@ -405,9 +409,7 @@ def _worker_init(workflow_id: str, campaign_id: str, perf_tracking: bool,
         _PROV_STATS = _ProvenanceStats() if perf_tracking else None
         atexit.register(_worker_shutdown)
     except Exception as e:
-        _log.warning(
-            "[Flowcept] Worker process init failed: %r — provenance disabled in this worker.", e
-        )
+        _log.warning("[Flowcept] Worker process init failed: %r — provenance disabled in this worker.", e)
 
 
 def _worker_shutdown() -> None:
@@ -456,8 +458,7 @@ def _patch_process_pool_executor() -> None:
     _ORIG_PPE_INIT = ProcessPoolExecutor.__init__
     _orig = _ORIG_PPE_INIT  # capture for closure
 
-    def _patched_init(self, max_workers=None, mp_context=None,
-                      initializer=None, initargs=(), **kw):
+    def _patched_init(self, max_workers=None, mp_context=None, initializer=None, initargs=(), **kw):
         interceptor = _ACTIVE_INTERCEPTOR
         if initializer is None and interceptor is not None:
             initializer = _worker_init
@@ -467,8 +468,7 @@ def _patch_process_pool_executor() -> None:
                 _PROV_STATS is not None,
                 _PERF_CSV_PATH,
             )
-        _orig(self, max_workers=max_workers, mp_context=mp_context,
-              initializer=initializer, initargs=initargs, **kw)
+        _orig(self, max_workers=max_workers, mp_context=mp_context, initializer=initializer, initargs=initargs, **kw)
 
     ProcessPoolExecutor.__init__ = _patched_init  # type: ignore[method-assign]
 
@@ -479,6 +479,7 @@ def _unpatch_process_pool_executor() -> None:
     if _ORIG_PPE_INIT is None:
         return
     from concurrent.futures import ProcessPoolExecutor
+
     ProcessPoolExecutor.__init__ = _ORIG_PPE_INIT  # type: ignore[method-assign]
     _ORIG_PPE_INIT = None
 
@@ -551,6 +552,7 @@ def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecuto
 # Academy Runtime patcher
 # ---------------------------------------------------------------------------
 
+
 def _install_runtime_patches() -> None:
     """
     Patch academy.runtime.Runtime at the class level so every Runtime instance
@@ -565,9 +567,7 @@ def _install_runtime_patches() -> None:
     # ---- @action dispatch ------------------------------------------------
     _orig_action = Runtime.action
 
-    async def _action_with_prov(
-        self, action: str, source_id: Any, *, args: Any, kwargs: Any
-    ) -> Any:
+    async def _action_with_prov(self, action: str, source_id: Any, *, args: Any, kwargs: Any) -> Any:
         interceptor = _ACTIVE_INTERCEPTOR
         if interceptor is None:
             return await _orig_action(self, action, source_id, args=args, kwargs=kwargs)
@@ -593,9 +593,19 @@ def _install_runtime_patches() -> None:
             tel_end = tel_cap.capture() if tel_cap else None
             try:
                 _emit_action(
-                    interceptor, self, action, source_id,
-                    args, kwargs, result, error,
-                    task_id, started_at, ended_at, tel_start, tel_end,
+                    interceptor,
+                    self,
+                    action,
+                    source_id,
+                    args,
+                    kwargs,
+                    result,
+                    error,
+                    task_id,
+                    started_at,
+                    ended_at,
+                    tel_start,
+                    tel_end,
                 )
             except Exception:
                 pass
@@ -627,9 +637,7 @@ def _install_runtime_patches() -> None:
             _emit_loop_event(interceptor, self, name, "exit", task_id, group_id, t0, tel_end)
         except Exception as exc:
             tel_end = tel_cap.capture() if tel_cap else None
-            _emit_loop_event(
-                interceptor, self, name, "error", task_id, group_id, t0, tel_end, error=exc
-            )
+            _emit_loop_event(interceptor, self, name, "error", task_id, group_id, t0, tel_end, error=exc)
             raise
         finally:
             _current_action_task_id.reset(token)
@@ -695,6 +703,7 @@ def _uninstall_runtime_patches() -> None:
 # ---------------------------------------------------------------------------
 # Emit helpers
 # ---------------------------------------------------------------------------
+
 
 def _agent_info(runtime: Any) -> tuple[str, str]:
     try:
@@ -823,9 +832,7 @@ def _emit_loop_event(
         interceptor.intercept_task(task)
 
 
-def _emit_lifecycle(
-    interceptor: AcademyInterceptor, runtime: Any, event: str
-) -> None:
+def _emit_lifecycle(interceptor: AcademyInterceptor, runtime: Any, event: str) -> None:
     with _timed("lifecycle_emit"):
         agent_type, agent_id = _agent_info(runtime)
         now = time.time()
@@ -844,6 +851,7 @@ def _emit_lifecycle(
 # ---------------------------------------------------------------------------
 # LLM hook — each LLM call becomes a child TaskObject of its parent action
 # ---------------------------------------------------------------------------
+
 
 def _on_llm_call(payload: dict) -> None:
     interceptor = _ACTIVE_INTERCEPTOR
@@ -1021,39 +1029,41 @@ def openai_chat(
             for tc in choice.message.tool_calls
         ]
 
-    record_llm_call({
-        "type": "chat_completion",
-        # --- request ---
-        "model": model,
-        "model_used": response.model,
-        "messages": messages,
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "max_tokens": max_tokens,
-        "n": n,
-        "stop": stop,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
-        "seed": seed,
-        "reasoning_effort": reasoning_effort,
-        "response_format": response_format,
-        "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        # --- response ---
-        "text": text,
-        "finish_reason": choice.finish_reason,
-        "tool_calls": tool_calls,
-        "system_fingerprint": getattr(response, "system_fingerprint", None),
-        "response_id": response.id,
-        "created": response.created,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        # --- provenance tags ---
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            # --- request ---
+            "model": model,
+            "model_used": response.model,
+            "messages": messages,
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "n": n,
+            "stop": stop,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "seed": seed,
+            "reasoning_effort": reasoning_effort,
+            "response_format": response_format,
+            "tools_provided": [t.get("function", {}).get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            # --- response ---
+            "text": text,
+            "finish_reason": choice.finish_reason,
+            "tool_calls": tool_calls,
+            "system_fingerprint": getattr(response, "system_fingerprint", None),
+            "response_id": response.id,
+            "created": response.created,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            # --- provenance tags ---
+            "context": context or {},
+        }
+    )
 
     return text
 
@@ -1069,7 +1079,7 @@ def anthropic_chat(
     stop_sequences: list[str] | None = None,
     tools: list | None = None,
     tool_choice: dict | None = None,
-    thinking: dict | None = None,   # {"type": "enabled", "budget_tokens": N} for extended thinking
+    thinking: dict | None = None,  # {"type": "enabled", "budget_tokens": N} for extended thinking
     metadata: dict | None = None,
     context: dict | None = None,
 ) -> str:
@@ -1157,11 +1167,13 @@ def anthropic_chat(
         elif block.type == "thinking":
             thinking_text += getattr(block, "thinking", "")
         elif block.type == "tool_use":
-            tool_uses.append({
-                "id": block.id,
-                "name": block.name,
-                "input": block.input,
-            })
+            tool_uses.append(
+                {
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                }
+            )
 
     usage = response.usage
     usage_dict = {
@@ -1171,35 +1183,37 @@ def anthropic_chat(
         "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
     }
 
-    record_llm_call({
-        "type": "chat_completion",
-        # --- request ---
-        "model": model,
-        "model_used": response.model,
-        "messages": req["messages"],
-        "user_prompt": prompt,
-        "system_prompt": system,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "temperature_suppressed": temperature is None,
-        "top_p": top_p,
-        "top_k": top_k,
-        "stop_sequences": stop_sequences,
-        "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
-        "tools_provided": [t.get("name") for t in (tools or [])],
-        "tool_choice": tool_choice,
-        # --- response ---
-        "text": text,
-        "thinking_text": thinking_text if thinking_text else None,
-        "finish_reason": response.stop_reason,
-        "stop_sequence": response.stop_sequence,
-        "tool_uses": tool_uses if tool_uses else None,
-        "response_id": response.id,
-        "usage": usage_dict,
-        "elapsed_s": elapsed,
-        # --- provenance tags ---
-        "context": context or {},
-    })
+    record_llm_call(
+        {
+            "type": "chat_completion",
+            # --- request ---
+            "model": model,
+            "model_used": response.model,
+            "messages": req["messages"],
+            "user_prompt": prompt,
+            "system_prompt": system,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "temperature_suppressed": temperature is None,
+            "top_p": top_p,
+            "top_k": top_k,
+            "stop_sequences": stop_sequences,
+            "thinking_budget_tokens": (thinking or {}).get("budget_tokens"),
+            "tools_provided": [t.get("name") for t in (tools or [])],
+            "tool_choice": tool_choice,
+            # --- response ---
+            "text": text,
+            "thinking_text": thinking_text if thinking_text else None,
+            "finish_reason": response.stop_reason,
+            "stop_sequence": response.stop_sequence,
+            "tool_uses": tool_uses if tool_uses else None,
+            "response_id": response.id,
+            "usage": usage_dict,
+            "elapsed_s": elapsed,
+            # --- provenance tags ---
+            "context": context or {},
+        }
+    )
 
     return text
 
@@ -1208,6 +1222,7 @@ def anthropic_chat(
 # FlowceptAnthropicClient — wraps anthropic.Anthropic / AsyncAnthropic to
 # capture full provenance for every messages.create / messages.stream call.
 # ---------------------------------------------------------------------------
+
 
 class FlowceptAnthropicClient:
     """
@@ -1249,6 +1264,7 @@ class _FlowceptAnthropicMessages:
 
     def create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1256,6 +1272,7 @@ class _FlowceptAnthropicMessages:
 
     async def async_create(self, **kwargs):
         import time as _time
+
         t0 = _time.time()
         result = await self._inner.create(**kwargs)
         self._record(kwargs, result, _time.time() - t0)
@@ -1263,6 +1280,7 @@ class _FlowceptAnthropicMessages:
 
     def stream(self, **kwargs):
         import time as _time
+
         return _FlowceptAnthropicStream(self._inner.stream(**kwargs), kwargs, self._record, _time.time())
 
     def _record(self, kwargs, result, elapsed):
@@ -1278,26 +1296,53 @@ class _FlowceptAnthropicMessages:
                 elif btype == "thinking":
                     thinking_text += getattr(block, "thinking", "")
                 elif btype == "tool_use":
-                    tool_uses.append({"id": getattr(block, "id", None), "name": getattr(block, "name", None), "input": getattr(block, "input", None)})
+                    tool_uses.append(
+                        {
+                            "id": getattr(block, "id", None),
+                            "name": getattr(block, "name", None),
+                            "input": getattr(block, "input", None),
+                        }
+                    )
             usage = getattr(result, "usage", None)
-            usage_dict = {attr: getattr(usage, attr, None) for attr in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")} if usage else {}
+            usage_dict = (
+                {
+                    attr: getattr(usage, attr, None)
+                    for attr in (
+                        "input_tokens",
+                        "output_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                    )
+                }
+                if usage
+                else {}
+            )
             ctx = dict(self._context)
             if self._agent_name:
                 ctx["agent_name"] = self._agent_name
             payload = {
-                "type": "chat_completion", "model": model, "model_used": getattr(result, "model", model),
-                "messages": kwargs.get("messages"), "system_prompt": kwargs.get("system"),
-                "max_tokens": kwargs.get("max_tokens"), "temperature": kwargs.get("temperature"),
-                "top_p": kwargs.get("top_p"), "top_k": kwargs.get("top_k"),
+                "type": "chat_completion",
+                "model": model,
+                "model_used": getattr(result, "model", model),
+                "messages": kwargs.get("messages"),
+                "system_prompt": kwargs.get("system"),
+                "max_tokens": kwargs.get("max_tokens"),
+                "temperature": kwargs.get("temperature"),
+                "top_p": kwargs.get("top_p"),
+                "top_k": kwargs.get("top_k"),
                 "stop_sequences": kwargs.get("stop_sequences"),
                 "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
                 "tools_provided": [t.get("name") for t in (kwargs.get("tools") or [])],
                 "tool_choice": kwargs.get("tool_choice"),
-                "text": text, "thinking_text": thinking_text or None,
+                "text": text,
+                "thinking_text": thinking_text or None,
                 "finish_reason": getattr(result, "stop_reason", None),
                 "stop_sequence": getattr(result, "stop_sequence", None),
-                "tool_uses": tool_uses or None, "response_id": getattr(result, "id", None),
-                "usage": usage_dict, "elapsed_s": elapsed, "context": ctx,
+                "tool_uses": tool_uses or None,
+                "response_id": getattr(result, "id", None),
+                "usage": usage_dict,
+                "elapsed_s": elapsed,
+                "context": ctx,
             }
             record_llm_call({k: v for k, v in payload.items() if v is not None})
         except Exception:
@@ -1318,6 +1363,7 @@ class _FlowceptAnthropicStream:
 
     def __exit__(self, *args):
         import time as _time
+
         result = None
         try:
             result = self._stream.get_final_message()
@@ -1475,6 +1521,7 @@ def _process_llm_call(interceptor: AcademyInterceptor, payload: dict, call_type:
 # Public plugin class
 # ---------------------------------------------------------------------------
 
+
 class FlowceptAcademyPlugin:
     """
     Generic FlowCept provenance plugin for any Academy-based application.
@@ -1542,8 +1589,7 @@ class FlowceptAcademyPlugin:
             )
         except Exception as e:
             print(
-                f"[FlowceptAcademyPlugin] WARNING: failed to start — {e!r}. "
-                "Continuing without provenance capture.",
+                f"[FlowceptAcademyPlugin] WARNING: failed to start — {e!r}. Continuing without provenance capture.",
                 flush=True,
             )
             _log.exception("FlowceptAcademyPlugin start failed")
@@ -1593,6 +1639,7 @@ FlowceptPlugin = FlowceptAcademyPlugin
 # ---------------------------------------------------------------------------
 # Serialisation helper
 # ---------------------------------------------------------------------------
+
 
 def _safe_clip(obj: Any, _depth: int = 0) -> Any:
     """Recursively convert objects to JSON-serialisable form without truncation."""

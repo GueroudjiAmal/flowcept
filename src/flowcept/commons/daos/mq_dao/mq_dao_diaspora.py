@@ -30,9 +30,7 @@ class MQDaoDiaspora(MQDao):
 
     def subscribe(self):
         """Subscribe to Diaspora topic."""
-        self.consumer = MQDaoDiaspora._topic.consumer(
-            name=MQ_CHANNEL + str(uuid.uuid4())
-        )
+        self.consumer = MQDaoDiaspora._topic.consumer(name=MQ_CHANNEL + str(uuid.uuid4()))
 
     def message_listener(self, message_handler: Callable):
         """Diaspora's Message listener."""

@@ -433,7 +433,9 @@ See [`examples/agents/harness/harness_example.py`](examples/agents/harness/harne
 and `flowcept-harness --help` for the full CLI (status, flush to a live Flowcept
 backend, repair of crashed sessions). Configuration is via `FLOWCEPT_HARNESS_*`
 environment variables, including redaction of credential-shaped values, prompt
-digests instead of full prompts, and offline-first buffering.
+digests instead of full prompts, and offline-first buffering. Full documentation,
+including the configuration table, privacy posture, and the record model, is in
+[`src/flowcept/agents/harness/README.md`](src/flowcept/agents/harness/README.md).
 
 ## Storage And Querying
 

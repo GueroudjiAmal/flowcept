@@ -359,6 +359,82 @@ Runnable examples for each framework are in [`examples/agents/`](examples/agents
 - [`examples/agents/autogen/autogen_example.py`](examples/agents/autogen/autogen_example.py)
 - [`examples/agents/combined_agentic_systems/combined_example.py`](examples/agents/combined_agentic_systems/combined_example.py) — all four frameworks running concurrently
 
+## AI Coding Harness Provenance Plugins
+
+Flowcept also captures what an **AI coding harness** actually did — prompts, turns,
+tool calls, subagents — as PROV-AGENT provenance. An agentic coding session is a
+workflow: a prompt causes a turn, a turn causes tool calls, a tool call edits a
+file. These plugins write that structure into Flowcept's own record format, so
+"which prompt produced this bad edit?" becomes a query instead of a scroll
+through a transcript.
+
+| Source | Plugin |
+| --- | --- |
+| Claude Code | [`plugins/flowcept`](plugins/flowcept) (Claude Code plugin), or hooks in `settings.json` |
+| Codex CLI, Gemini CLI, Cursor, OpenCode | [`flowcept.agents.cli_harness`](src/flowcept/agents/cli_harness/) — one JSON profile per harness |
+| Anything emitting OpenTelemetry GenAI spans | [`flowcept.agents.otel`](src/flowcept/agents/otel/) span exporter (`pip install flowcept[harness_otel]`) |
+| Claude Agent SDK | [`flowcept.agents.claude_agent_sdk`](src/flowcept/agents/claude_agent_sdk/) `trace_query` (`pip install flowcept[harness_claude_sdk]`) |
+| OpenAI Agents SDK | [`flowcept.agents.openai_agents`](src/flowcept/agents/openai_agents/) tracing processor |
+| LangChain / LangGraph | [`flowcept.agents.langchain`](src/flowcept/agents/langchain/) callback handler |
+| Your own agent | `flowcept.agents.harness.SessionTracer`, or the `flowcept-harness-mcp` server's `record_event` tool |
+
+The capture path is deliberately **stdlib-only**: a harness hook is a fresh process
+on the interactive critical path, and importing heavy dependencies costs far more
+than the capture itself. Records are appended as JSONL, one file per session, under
+`~/.flowcept/harness/buffers/`, in Flowcept's native format.
+
+### Quick start: Claude Code
+
+```
+/plugin marketplace add <path to this repo>
+/plugin install flowcept
+```
+
+Then work normally, and when you want to see what was recorded:
+
+```bash
+flowcept-harness sessions        # every captured session, newest first
+flowcept-harness show            # the most recent one, turn by turn
+flowcept-harness report          # a Flowcept workflow card
+```
+
+### Quick start: another CLI harness
+
+Point the harness's hook at the profile-driven adapter:
+
+```bash
+flowcept-harness hook --harness codex --profile codex
+```
+
+Profiles live in [`src/flowcept/agents/cli_harness/profiles/`](src/flowcept/agents/cli_harness/profiles/)
+and are plain JSON — adding a harness means adding a file, not writing code.
+
+### Quick start: in-process capture
+
+```python
+# OpenTelemetry GenAI spans
+from flowcept.agents.otel.otel_plugin import FlowceptSpanExporter
+
+# OpenAI Agents SDK — register once, nothing else changes
+from flowcept.agents.openai_agents.openai_agents_plugin import install
+install()
+
+# LangChain / LangGraph
+from flowcept.agents.langchain.langchain_plugin import FlowceptCallbackHandler
+
+# Claude Agent SDK — a drop-in for claude_agent_sdk.query
+from flowcept.agents.claude_agent_sdk.claude_agent_sdk_plugin import trace_query
+
+# Your own agent
+from flowcept.agents.harness import SessionTracer
+```
+
+See [`examples/agents/harness/harness_example.py`](examples/agents/harness/harness_example.py)
+and `flowcept-harness --help` for the full CLI (status, flush to a live Flowcept
+backend, repair of crashed sessions). Configuration is via `FLOWCEPT_HARNESS_*`
+environment variables, including redaction of credential-shaped values, prompt
+digests instead of full prompts, and offline-first buffering.
+
 ## Storage And Querying
 
 Flowcept can run fully offline or as an online distributed system.

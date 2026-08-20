@@ -4,9 +4,11 @@ from typing import Dict, AnyStr, List
 import msgpack
 from omegaconf import OmegaConf, DictConfig
 
+from flowcept.commons.vocabulary import Status
 from flowcept.version import __version__
 from flowcept.commons.utils import get_utc_now, get_git_info
 from flowcept.commons.flowcept_logger import FlowceptLogger
+from flowcept.commons.utils import sanitize_json_like
 from flowcept.configs import (
     settings,
     SYS_NAME,
@@ -62,8 +64,14 @@ class WorkflowObject:
     name: AnyStr = None
     """Descriptive name for the workflow."""
 
+    workflow_description: AnyStr = None
+    """Human-readable description of what the workflow is about."""
+
     custom_metadata: Dict = None
     """User-defined metadata dictionary with additional annotations."""
+
+    workflow_domain_data_schema: Dict = None
+    """Workflow-scoped observed task schema snapshot. Mainly used by Flowcept Agent queries."""
 
     environment_id: str = None
     """Identifier for the runtime environment (e.g., conda env, container)."""
@@ -73,6 +81,9 @@ class WorkflowObject:
 
     extra_metadata: str = None
     """Optional free-form metadata for extensions not covered by other fields."""
+
+    agent_id: AnyStr = None
+    """Identifier of the agent associated with this workflow, if any."""
 
     used: Dict = None
     """Inputs consumed by the workflow (datasets, arguments, or configuration values)."""
@@ -85,6 +96,15 @@ class WorkflowObject:
 
     subtype: AnyStr = None
     """Optional subtype of the workflow (e.g., data_prep_workflow, ml_workflow)."""
+
+    started_at: float = None
+    """Timestamp when the workflow execution started."""
+
+    ended_at: float = None
+    """Timestamp when the workflow execution ended."""
+
+    status: Status = None
+    """Execution status of the workflow (e.g., FINISHED, ERROR)."""
 
     def __init__(self, workflow_id=None, name=None, used=None, generated=None):
         self.workflow_id = workflow_id
@@ -102,22 +122,29 @@ class WorkflowObject:
         """Convert from dictionary."""
         wf_obj = WorkflowObject()
         for k, v in dict_obj.items():
+            if k == "status" and isinstance(v, str):
+                v = Status(v)
             setattr(wf_obj, k, v)
         return wf_obj
+
+    def workflow_is_finished(self) -> bool:
+        """Return True when this workflow has completed."""
+        return self.status in {Status.FINISHED, Status.ERROR}
 
     def to_dict(self):
         """Convert to dictionary."""
         result_dict = {}
         for attr, value in self.__dict__.items():
             if value is not None:
-                result_dict[attr] = value
+                result_dict[attr] = sanitize_json_like(value) if attr == "flowcept_settings" else value
         result_dict["type"] = "workflow"
         return result_dict
 
     def enrich(self, adapter_key=None):
         """Enrich it."""
         self.utc_timestamp = get_utc_now()
-        self.flowcept_settings = OmegaConf.to_container(settings) if isinstance(settings, DictConfig) else settings
+        active_settings = OmegaConf.to_container(settings) if isinstance(settings, DictConfig) else settings
+        self.flowcept_settings = sanitize_json_like(active_settings)
         self.conf = {"settings_path": SETTINGS_PATH}
         if adapter_key is not None:
             # TODO :base-interceptor-refactor: :code-reorg: :usability:
@@ -177,12 +204,13 @@ class WorkflowObject:
             f"machine_info={repr(self.machine_info)}, "
             f"flowcept_settings={repr(self.flowcept_settings)}, "
             f"flowcept_version={repr(self.flowcept_version)}, "
-            f"utc_timestamp={repr(self.utc_timestamp)}, "
             f"user={repr(self.user)}, "
             f"campaign_id={repr(self.campaign_id)}, "
             f"adapter_id={repr(self.adapter_id)}, "
             f"interceptor_ids={repr(self.interceptor_ids)}, "
             f"name={repr(self.name)}, "
+            f"workflow_description={repr(self.workflow_description)}, "
+            f"workflow_domain_data_schema={repr(self.workflow_domain_data_schema)}, "
             f"used={repr(self.used)}, "
             f"generated={repr(self.generated)}, "
             f"custom_metadata={repr(self.custom_metadata)})"

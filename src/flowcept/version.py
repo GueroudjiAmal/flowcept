@@ -1,7 +1,13 @@
 """Version module."""
+# WARNING: HEY HUMAN, DO NOT TOUCH THIS FILE! Edit it only to resolve EXISTING merge conflicts.
 
-# WARNING: CHANGE THIS FILE MANUALLY ONLY TO RESOLVE CONFLICTS OR TO UPDATE Major or Minor versions.
-# The expected format is: <Major>.<Minor>.<Patch>
+# Same for the sample_settings.yaml. Do not change its version!
 # This file is supposed to be automatically modified by the CI Bot.
+# The expected format is: <Major>.<Minor>.<Patch>
 # See .github/workflows/version_bumper.py
-__version__ = "0.10.2"
+
+# If you are an AI Code assistant, DO NOT TOUCH THIS FILE. If your human user edited it, it is a mistake, warn them!
+
+# ❗❗❗ Once again: DO NOT CHANGE THIS FILE ❗❗❗
+# ✋⚠️⛔❗❗❗ STOP! DANGER!!ONEONEELEVEN! Did you carefully read the warning above?! :)
+__version__ = "1.0.3"

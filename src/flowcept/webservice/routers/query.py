@@ -7,9 +7,8 @@ from typing import Any, Dict, List, Literal
 from fastapi import APIRouter, Depends, HTTPException
 
 from flowcept.flowcept_api.db_api import DBAPI
-from flowcept.webservice.deps import get_db_api
 from flowcept.webservice.schemas.common import ListResponse, ObjectQueryRequest
-from flowcept.webservice.services.serializers import normalize_docs
+from flowcept.commons.utils import normalize_docs
 
 router = APIRouter(prefix="/query", tags=["query"])
 
@@ -80,8 +79,8 @@ def _get_scope_metadata(scope: QueryScope) -> tuple[str, Dict[str, Any], bool]:
     if scope == "objects":
         return "objects", {}, True
     if scope == "models":
-        return "objects", {"type": "ml_model"}, True
-    return "objects", {"type": "dataset"}, True
+        return "objects", {"object_type": "ml_model"}, True
+    return "objects", {"object_type": "dataset"}, True
 
 
 def _get_nested(item: Dict[str, Any], field: str) -> Any:
@@ -109,7 +108,7 @@ def _apply_shaping(docs: List[Dict[str, Any]], payload: ObjectQueryRequest) -> L
 
 
 @router.post("/{scope}", response_model=ListResponse)
-def query_scope(scope: QueryScope, payload: ObjectQueryRequest, db: DBAPI = Depends(get_db_api)) -> ListResponse:
+def query_scope(scope: QueryScope, payload: ObjectQueryRequest, db: DBAPI = Depends(DBAPI)) -> ListResponse:
     """Run a read-only advanced query over a constrained collection scope."""
     _validate_filter_shape(payload.filter)
     collection, base_filter, include_data_supported = _get_scope_metadata(scope)

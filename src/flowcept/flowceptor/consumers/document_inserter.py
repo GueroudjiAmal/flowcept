@@ -12,6 +12,7 @@ from flowcept.commons.flowcept_dataclasses.task_object import TaskObject
 from flowcept.commons.flowcept_dataclasses.workflow_object import (
     WorkflowObject,
 )
+from flowcept.commons.flowcept_dataclasses.agent_object import AgentObject
 from flowcept.commons.flowcept_logger import FlowceptLogger
 from flowcept.commons.utils import GenericJSONDecoder
 from flowcept.commons.vocabulary import Status
@@ -120,10 +121,13 @@ class DocumentInserter(BaseConsumer):
                 message["workflow_id"] = wf_id
 
         if "campaign_id" not in message:
+            # The current campaign lookup is optional because kv_db can be disabled.
             try:
-                campaign_id = self._mq_dao._keyvalue_dao.get_key("current_campaign_id")
-                if campaign_id:
-                    message["campaign_id"] = campaign_id
+                kv_dao = getattr(self._mq_dao, "_keyvalue_dao", None)
+                if kv_dao is not None:
+                    campaign_id = kv_dao.get_key("current_campaign_id")
+                    if campaign_id:
+                        message["campaign_id"] = campaign_id
             except Exception as e:
                 self.logger.error(e)
 
@@ -175,6 +179,15 @@ class DocumentInserter(BaseConsumer):
         wf_obj = WorkflowObject.from_dict(message)
         for dao in self._doc_daos:
             dao.insert_or_update_workflow(wf_obj)
+
+    def _handle_agent_message(self, message: Dict):
+        message.pop("type")
+        self.logger.debug(f"Received following Agent msg in DocInserter:\n\t[BEGIN_MSG]{message}\n[END_MSG]\t")
+        if REMOVE_EMPTY_FIELDS:
+            remove_empty_fields_from_dict(message)
+        agent_obj = AgentObject.from_dict(message)
+        for dao in self._doc_daos:
+            dao.insert_or_update_agent(agent_obj)
 
     def _handle_control_message(self, message):
         self.logger.info(f"I'm doc inserter {id(self)}. I received this control msg received: {message}")
@@ -281,11 +294,20 @@ class DocumentInserter(BaseConsumer):
         elif msg_type == "workflow":
             self._handle_workflow_message(msg_obj)
             return True
+        elif msg_type == "agent":
+            self._handle_agent_message(msg_obj)
+            return True
+        elif msg_type == "object":
+            self.logger.debug("Ignoring object metadata message in DocumentInserter; DBAPI persists objects directly.")
+            return True
         elif msg_type is None:
             # Trying to infer the type
             if "task_id" in msg_obj or "activity_id" in msg_obj:
                 msg_obj["type"] = "task"
                 self._handle_task_message(msg_obj)
+            elif "agent_id" in msg_obj:
+                msg_obj["type"] = "agent"
+                self._handle_agent_message(msg_obj)
             elif "name" in msg_obj or "environment_id" in msg_obj:
                 msg_obj["type"] = "workflow"
                 self._handle_workflow_message(msg_obj)

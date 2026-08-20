@@ -1,0 +1,63 @@
+# GitLab CI for the amsc2 GitLab MIRROR of ORNL/flowcept.
+#
+# Builds the Flowcept service image (deployment/service.Dockerfile) and pushes it to the
+# amsc-i2-dev ECR repo `intelligent-interfaces/flowcept` using GitLab→AWS OIDC federation
+# (no static credentials). GitHub ignores this file; only GitLab CI runs it. GitHub Actions
+# (.github/workflows/*) are unaffected.
+#
+# Prerequisites (platform team, one-time):
+#   - The GitLab mirror project's path is in `gitlab_project_paths`, and `main` is in
+#     `allowed_branches`, on the amsc-i2-dev `gitlab-ci-ecr-pusher-amsc-i2-dev` trust policy.
+#   - ECR repo `intelligent-interfaces/flowcept` exists (added via terraform.tfvars).
+#   - Docker-in-Docker capable runners are available.
+# CI/CD variables (on the GitLab mirror project):
+#   - AWS_OIDC_ROLE_ARN = arn:aws:iam::332327025046:role/gitlab-ci-ecr-pusher-amsc-i2-dev  (masked)
+
+stages:
+  - build-push
+
+variables:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "332327025046"
+  ECR_REPO: intelligent-interfaces/flowcept
+
+build-push-image:
+  stage: build-push
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://gitlab.com
+  before_script:
+    # Do NOT `apk add aws-cli` — Alpine's aws-cli v2 on docker:27 crashes at import (pyexpat/expat
+    # symbol skew: "XML_SetAllocTrackerActivationThreshold: symbol not found"). Instead get the ECR
+    # login from the official AWS CLI image (ECR Public → no Docker Hub rate limits) run via dind.
+    # OIDC token is passed as env and written to a file *inside* that container (dind can't mount the
+    # job container's filesystem), and AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE auto-federate.
+    - apk add --no-cache python3   # only for the version parse in `script:` (no aws-cli / pyexpat)
+    - |
+      docker run --rm \
+        -e AWS_ROLE_ARN="$AWS_OIDC_ROLE_ARN" \
+        -e AWS_REGION="$AWS_REGION" \
+        -e OIDC_TOKEN="$GITLAB_OIDC_TOKEN" \
+        --entrypoint /bin/sh public.ecr.aws/aws-cli/aws-cli:latest -c '
+          printf "%s" "$OIDC_TOKEN" > /tmp/oidc
+          export AWS_WEB_IDENTITY_TOKEN_FILE=/tmp/oidc AWS_ROLE_SESSION_NAME=gitlab-ci
+          aws ecr get-login-password --region "$AWS_REGION"
+        ' | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+  script:
+    - VERSION=$(python3 -c "exec(open('src/flowcept/version.py').read()); print(__version__)")
+    - IMAGE="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO"
+    - echo "Building $IMAGE:v$VERSION"
+    - docker build -f deployment/service.Dockerfile -t "$IMAGE:v$VERSION" -t "$IMAGE:latest" .
+    - docker push "$IMAGE:v$VERSION"
+    - docker push "$IMAGE:latest"
+    - echo "Pushed $IMAGE:v$VERSION (bump image.tag in amsc-platform _config.libsonnet to v$VERSION)"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

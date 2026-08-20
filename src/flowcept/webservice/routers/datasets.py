@@ -1,4 +1,4 @@
-"""Dataset object endpoints (type=dataset)."""
+"""Dataset object endpoints (object_type=dataset)."""
 
 import json
 from typing import Any, Dict
@@ -7,9 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from flowcept.flowcept_api.db_api import DBAPI
-from flowcept.webservice.deps import get_db_api
 from flowcept.webservice.schemas.common import ListResponse, ObjectQueryRequest
-from flowcept.webservice.services.serializers import normalize_docs
+from flowcept.commons.utils import normalize_docs
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -45,11 +44,11 @@ def list_datasets(
     object_id: str | None = None,
     filter_json: str | None = None,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> ListResponse:
     """List dataset objects with optional filters."""
     query_filter = _json_filter(filter_json)
-    query_filter["type"] = "dataset"
+    query_filter["object_type"] = "dataset"
     if workflow_id is not None:
         query_filter["workflow_id"] = workflow_id
     if task_id is not None:
@@ -67,7 +66,7 @@ def get_dataset(
     object_id: str,
     version: int | None = None,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Get dataset object metadata by id and optional version."""
     try:
@@ -75,7 +74,7 @@ def get_dataset(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if blob is None or getattr(blob, "type", None) != "dataset":
+    if blob is None or getattr(blob, "object_type", None) != "dataset":
         raise HTTPException(status_code=404, detail=f"Dataset not found: {object_id}")
 
     return normalize_docs([blob.to_dict()], include_data=include_data)[0]
@@ -86,7 +85,7 @@ def get_dataset_version(
     object_id: str,
     version: int,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Get a specific dataset object version."""
     return get_dataset(object_id=object_id, version=version, include_data=include_data, db=db)
@@ -96,7 +95,7 @@ def get_dataset_version(
 def download_dataset(
     object_id: str,
     version: int | None = None,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Download dataset payload as a binary attachment."""
     try:
@@ -104,7 +103,7 @@ def download_dataset(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if blob is None or getattr(blob, "type", None) != "dataset":
+    if blob is None or getattr(blob, "object_type", None) != "dataset":
         raise HTTPException(status_code=404, detail=f"Dataset not found: {object_id}")
 
     doc = blob.to_dict()
@@ -118,10 +117,10 @@ def download_dataset(
 
 
 @router.post("/query", response_model=ListResponse)
-def query_datasets(payload: ObjectQueryRequest, db: DBAPI = Depends(get_db_api)):
+def query_datasets(payload: ObjectQueryRequest, db: DBAPI = Depends(DBAPI)):
     """Run an advanced read-only query for dataset objects."""
     query_filter = dict(payload.filter)
-    query_filter["type"] = "dataset"
+    query_filter["object_type"] = "dataset"
     docs = db.query(
         collection="objects",
         filter=query_filter,

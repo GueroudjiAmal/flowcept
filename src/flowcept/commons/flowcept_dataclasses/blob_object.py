@@ -19,7 +19,7 @@ class BlobObject:
     workflow_id: AnyStr = None
     """Identifier of the workflow associated with this blob object, if any."""
 
-    type: AnyStr = None
+    object_type: AnyStr = None
     """User-defined category label for the blob object (for example, ``ml_model``)."""
 
     custom_metadata: Dict = None
@@ -31,23 +31,33 @@ class BlobObject:
     version: int = 0
     """Monotonic version of this blob object. Starts at ``0`` and increments on updates."""
 
+    created_at: float = None
+    """Epoch timestamp when the object was first persisted."""
+
+    updated_at: float = None
+    """Epoch timestamp when the object was last persisted or updated."""
+
     def __init__(
         self,
         object_id=None,
         task_id=None,
         workflow_id=None,
-        type=None,
+        object_type=None,
         custom_metadata=None,
         tags=None,
         version: int = 0,
+        created_at: float = None,
+        updated_at: float = None,
     ):
         self.object_id = object_id
         self.task_id = task_id
         self.workflow_id = workflow_id
-        self.type = type
+        self.object_type = object_type
         self.custom_metadata = custom_metadata
         self.tags = tags
         self.version = 0 if version is None else int(version)
+        self.created_at = created_at
+        self.updated_at = updated_at
 
     @staticmethod
     def object_id_field():
@@ -81,10 +91,12 @@ class BlobObject:
             f"object_id={repr(self.object_id)}, "
             f"task_id={repr(self.task_id)}, "
             f"workflow_id={repr(self.workflow_id)}, "
-            f"type={repr(self.type)}, "
+            f"object_type={repr(self.object_type)}, "
             f"custom_metadata={repr(self.custom_metadata)}, "
             f"tags={repr(self.tags)}, "
-            f"version={repr(self.version)})"
+            f"version={repr(self.version)}, "
+            f"created_at={repr(self.created_at)}, "
+            f"updated_at={repr(self.updated_at)})"
         )
 
     def __str__(self):

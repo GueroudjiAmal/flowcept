@@ -31,6 +31,7 @@ Good practice is to cherry-pick the extras relevant to your workflow instead of 
    pip install flowcept[mlflow]          # MLflow adapter
    pip install flowcept[dask]            # Dask adapter
    pip install flowcept[tensorboard]     # TensorBoard adapter
+   pip install flowcept[rabbitmq]        # RabbitMQ message queue
    pip install flowcept[kafka]           # Kafka message queue
    pip install flowcept[nvidia]          # NVIDIA GPU runtime capture
    pip install flowcept[telemetry]       # CPU/GPU/memory telemetry capture
@@ -39,7 +40,6 @@ Good practice is to cherry-pick the extras relevant to your workflow instead of 
    pip install flowcept[llm_agent]       # MCP agent, LangChain, Streamlit integration
    pip install flowcept[llm_google]      # Google GenAI + Flowcept agent support
    pip install flowcept[llm_agent_audio] # MCP agent with audio enabled (tts).
-   pip install flowcept[analytics]       # Extra analytics (seaborn, plotly, scipy)
    pip install flowcept[dev]             # Developer dependencies (docs, tests, lint, etc.)
 
 Installing with Common Runtime Bundle
@@ -115,9 +115,10 @@ Message Queue (MQ)
 
 Supported MQs:
 
-- `Redis <https://redis.io>`_ → **default**, lightweight, works on Linux, macOS, Windows, and HPC (tested on Frontier and Summit)  
-- `Kafka <https://kafka.apache.org>`_ → for distributed environments or if Kafka is already in your stack  
-- `Mofka <https://mofka.readthedocs.io>`_ → optimized for HPC runs  
+- `Redis <https://redis.io>`_ → **default**, lightweight, works on Linux, macOS, Windows, and HPC (tested on Frontier and Summit)
+- `RabbitMQ <https://www.rabbitmq.com>`_ → AMQP-based broker, suitable for cloud and enterprise environments
+- `Kafka <https://kafka.apache.org>`_ → for distributed environments or if Kafka is already in your stack
+- `Mofka <https://mofka.readthedocs.io>`_ → optimized for HPC runs
 
 Database (DB)
 --------------
@@ -150,10 +151,11 @@ Using Docker Compose (recommended)
 
 We provide a `Makefile <https://github.com/ORNL/flowcept/blob/main/deployment/Makefile>`_ with shortcuts:
 
-1. **Redis only (no DB)**: ``make services``   (LMDB can be used in this setup as a lightweight DB)  
-2. **Redis + MongoDB**: ``make services-mongo``  
-3. **Kafka + MongoDB**: ``make services-kafka``  
-4. **Mofka only (no DB)**: ``make services-mofka``  
+1. **Redis only (no DB)**: ``make services``   (LMDB can be used in this setup as a lightweight DB)
+2. **Redis + MongoDB**: ``make services-mongo``
+3. **RabbitMQ + MongoDB**: ``make services-rabbitmq``
+4. **Kafka + MongoDB**: ``make services-kafka``
+5. **Mofka only (no DB)**: ``make services-mofka``
 
 To customize, edit the YAML files in `deployment <https://github.com/ORNL/flowcept/tree/main/deployment>`_ and run:
 
@@ -191,6 +193,7 @@ Flowcept Settings File
 Flowcept uses a settings file for configuration.
 
 - To create a minimal settings file (**recommended**):
+  use:
 
 .. code-block:: bash
 
@@ -199,12 +202,26 @@ Flowcept uses a settings file for configuration.
 Creates ``~/.flowcept/settings.yaml``.
 
 - To create a full settings file with all options:
+  use:
 
 .. code-block:: bash
 
    flowcept --init-settings --full
 
 Also creates ``~/.flowcept/settings.yaml``.
+
+Recommended pattern:
+
+.. code-block:: bash
+
+   flowcept --init-settings --full -y
+   flowcept --config-profile full-online -y
+
+Meaning:
+
+- ``flowcept --init-settings``: minimal file from ``DEFAULT_SETTINGS``
+- ``flowcept --init-settings --full``: copy ``resources/sample_settings.yaml``
+- ``flowcept --config-profile ...``: apply a runtime overlay to the existing file
 
 What You Can Configure
 -----------------------
@@ -218,13 +235,29 @@ What You Can Configure
 - Data observability adapters  
 - And more (see `example file <https://github.com/ORNL/flowcept/blob/main/resources/sample_settings.yaml>`_)  
 
+Common profiles:
+
+- ``full-online``: Redis MQ + Redis KV + Mongo + online flush
+- ``full-offline``: offline flush + dump buffer + MQ/KV/DB disabled
+- ``mq-only``: MQ only, no KV/Mongo/LMDB
+- ``mq-only-no-flush``: MQ enabled, tasks accumulate locally and are bulk-published to MQ in a single end-of-run flush; also dumps to local JSONL; use with ``Flowcept(check_safe_stops=False)``
+- ``full-telemetry``: telemetry on except GPU
+
+Adapter flags are additive:
+
+.. code-block:: bash
+
+   flowcept --init-settings --dask -y
+   flowcept --init-settings --mlflow -y
+   flowcept --init-settings --tensorboard -y
+
 Custom Settings File
 ---------------------
 
 Flowcept looks for its settings in the following order:
 
-1. ``~/.flowcept/settings.yaml`` — created by ``flowcept --init-settings``  
-2. Environment variable ``FLOWCEPT_SETTINGS_PATH`` — if set, Flowcept will use this  
+1. Environment variable ``FLOWCEPT_SETTINGS_PATH`` — if set, Flowcept will use this path
+2. ``~/.flowcept/settings.yaml`` — created by ``flowcept --init-settings``  
 3. Default sample file — `sample_settings.yaml <https://github.com/ORNL/flowcept/blob/main/resources/sample_settings.yaml>`_  
 
 Environment Variables
@@ -236,6 +269,12 @@ Environment Variables
    If ``FLOWCEPT_USE_DEFAULT=true``, Flowcept runs in strict default mode:
    external settings files and runtime env overrides (MQ/DB host/ports/toggles, etc.)
    are ignored.
+
+Short version:
+
+- settings file controls the normal behavior
+- profiles modify the settings file
+- environment variables can still override those values at runtime
 
 General
 ~~~~~~~
@@ -318,6 +357,8 @@ LMDB
      - Purpose / Default
    * - ``LMDB_ENABLED``
      - Enable LMDB persistence. Parsed as boolean: ``"true"`` to enable. Default from settings.
+   * - ``LMDB_PATH``
+     - Override the LMDB database directory. Default from ``databases.lmdb.path`` in settings (``flowcept_lmdb`` if unset).
 
 Agent / MCP
 ~~~~~~~~~~~

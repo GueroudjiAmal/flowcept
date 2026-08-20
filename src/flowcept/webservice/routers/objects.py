@@ -7,9 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from flowcept.flowcept_api.db_api import DBAPI
-from flowcept.webservice.deps import get_db_api
 from flowcept.webservice.schemas.common import ListResponse, ObjectQueryRequest
-from flowcept.webservice.services.serializers import normalize_docs
+from flowcept.commons.utils import normalize_docs
 from flowcept.webservice.services.sorting import sort_docs_by_first_date_field
 
 router = APIRouter(prefix="/objects", tags=["objects"])
@@ -44,10 +43,10 @@ def list_objects(
     object_id: str | None = None,
     workflow_id: str | None = None,
     task_id: str | None = None,
-    type: str | None = None,
+    object_type: str | None = None,
     filter_json: str | None = None,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> ListResponse:
     """List objects with optional basic filters."""
     query_filter = _json_filter(filter_json)
@@ -57,8 +56,8 @@ def list_objects(
         query_filter["workflow_id"] = workflow_id
     if task_id is not None:
         query_filter["task_id"] = task_id
-    if type is not None:
-        query_filter["type"] = type
+    if object_type is not None:
+        query_filter["object_type"] = object_type
 
     docs = db.blob_object_query(filter=query_filter) or []
     docs = sort_docs_by_first_date_field(docs, ["created_at", "updated_at", "utc_timestamp", "timestamp"])
@@ -68,7 +67,7 @@ def list_objects(
 
 
 @router.get("/{object_id}", response_model=Dict[str, Any])
-def get_object(object_id: str, include_data: bool = False, db: DBAPI = Depends(get_db_api)) -> Dict[str, Any]:
+def get_object(object_id: str, include_data: bool = False, db: DBAPI = Depends(DBAPI)) -> Dict[str, Any]:
     """Get latest version of an object by id."""
     try:
         obj = db.get_blob_object(object_id=object_id)
@@ -87,7 +86,7 @@ def get_object_version(
     object_id: str,
     version: int,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> Dict[str, Any]:
     """Get a specific object version by id and version number."""
     try:
@@ -106,7 +105,7 @@ def get_object_version(
 def download_object(
     object_id: str,
     version: int | None = None,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> Response:
     """Download object payload as binary."""
     try:
@@ -130,7 +129,7 @@ def download_object(
 def download_object_version(
     object_id: str,
     version: int,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> Response:
     """Download a specific object payload version as binary."""
     return download_object(object_id=object_id, version=version, db=db)
@@ -140,7 +139,7 @@ def download_object_version(
 def get_object_history(
     object_id: str,
     limit: int = Query(default=100, ge=1, le=1000),
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> ListResponse:
     """Get object metadata history (latest-first)."""
     try:
@@ -153,8 +152,20 @@ def get_object_history(
     return ListResponse(items=normalized, count=len(normalized), limit=limit)
 
 
+@router.delete("/{object_id}", response_model=Dict[str, Any])
+def delete_object(object_id: str, db: DBAPI = Depends(DBAPI)) -> Dict[str, Any]:
+    """Delete an object and all its versions by object_id."""
+    try:
+        deleted = db.delete_object_keys("object_id", [object_id])
+    except NotImplementedError:
+        raise HTTPException(status_code=501, detail="Delete not supported by this DB backend.")
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Object not found or could not be deleted: {object_id}")
+    return {"deleted": True, "object_id": object_id}
+
+
 @router.post("/query", response_model=ListResponse)
-def query_objects(payload: ObjectQueryRequest, db: DBAPI = Depends(get_db_api)) -> ListResponse:
+def query_objects(payload: ObjectQueryRequest, db: DBAPI = Depends(DBAPI)) -> ListResponse:
     """Run an advanced read-only object query."""
     docs = db.query(
         collection="objects",

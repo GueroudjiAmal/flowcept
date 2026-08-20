@@ -10,8 +10,15 @@ How to add a new command:
 Supports:
 - `flowcept --command`
 - `flowcept --command --arg=value`
+- `flowcept --start --agent --webservice --ui`
 - `flowcept -h` or `flowcept` for full help
 - `flowcept --help --command` for command-specific help
+
+Configuration model:
+- `flowcept --init-settings` creates a minimal settings file from `DEFAULT_SETTINGS`.
+- `flowcept --init-settings --full` copies `resources/sample_settings.yaml`.
+- `flowcept --config-profile <name>` applies an overlay to the existing settings file.
+- Adapter flags such as `--dask` and `--mlflow` are additive and reuse the current file.
 """
 
 import subprocess
@@ -23,6 +30,8 @@ import sys
 import json
 import textwrap
 import inspect
+import signal
+import time
 from functools import wraps
 from importlib import resources
 from pathlib import Path
@@ -48,11 +57,37 @@ CONFIG_PROFILES = {
         "kv_db.enabled": True,
         "databases.mongodb.enabled": True,
         "databases.lmdb.enabled": False,
+        "db_buffer.insertion_buffer_time_secs": 5,
+    },
+    "full-telemetry": {
+        "telemetry_capture.cpu": True,
+        "telemetry_capture.per_cpu": True,
+        "telemetry_capture.process_info": True,
+        "telemetry_capture.mem": True,
+        "telemetry_capture.disk": True,
+        "telemetry_capture.network": True,
+        "telemetry_capture.machine_info": True,
+        "telemetry_capture.gpu": None,
+    },
+    "mq-only": {
+        "project.db_flush_mode": "online",
+        "mq.enabled": True,
+        "kv_db.enabled": False,
+        "databases.mongodb.enabled": False,
+        "databases.lmdb.enabled": False,
     },
     "full-offline": {
         "project.db_flush_mode": "offline",
         "project.dump_buffer.enabled": True,
         "mq.enabled": False,
+        "kv_db.enabled": False,
+        "databases.mongodb.enabled": False,
+        "databases.lmdb.enabled": False,
+    },
+    "mq-only-no-flush": {
+        "project.db_flush_mode": "offline",
+        "project.dump_buffer.enabled": True,
+        "mq.enabled": True,
         "kv_db.enabled": False,
         "databases.mongodb.enabled": False,
         "databases.lmdb.enabled": False,
@@ -84,14 +119,40 @@ def show_settings():
     )
 
 
-def init_settings(full: bool = False):
+def init_settings(
+    full: bool = False,
+    yes: bool = False,
+    dask: bool = False,
+    mlflow: bool = False,
+    tensorboard: bool = False,
+):
     """
-    Create a new settings.yaml file in your home directory under ~/.flowcept.
+    Create or extend the user settings file.
 
     Parameters
     ----------
-    full : bool, optional -- Run with full to generate a complete version of the settings file.
+    full : bool, optional
+        If true, copy `resources/sample_settings.yaml`. Otherwise create the minimal
+        settings file from `flowcept.configs.DEFAULT_SETTINGS`.
+    yes : bool, optional
+        Auto-confirm overwrite if the settings file already exists.
+    dask : bool, optional
+        Add default dask adapter settings under `adapters.dask`.
+    mlflow : bool, optional
+        Add default mlflow adapter settings under `adapters.mlflow`.
+    tensorboard : bool, optional
+        Add default tensorboard adapter settings under `adapters.tensorboard`.
+
+    Notes
+    -----
+    - If `FLOWCEPT_SETTINGS_PATH` is set, that path is used instead of
+      `~/.flowcept/settings.yaml`.
+    - Adapter flags are additive: if the target file already exists, Flowcept reuses it
+      and only writes adapter sections.
+    - `--full` only copies the full sample file. It does not apply a runtime profile.
     """
+    add_adapters = dask or mlflow or tensorboard
+
     settings_path_env = os.getenv("FLOWCEPT_SETTINGS_PATH", None)
     if settings_path_env is not None:
         print(f"FLOWCEPT_SETTINGS_PATH environment variable is set to {settings_path_env}.")
@@ -100,14 +161,21 @@ def init_settings(full: bool = False):
         dest_path = Path(os.path.join(configs._SETTINGS_DIR, "settings.yaml"))
 
     if dest_path.exists():
-        overwrite = input(f"{dest_path} already exists. Overwrite? (y/N): ").strip().lower()
-        if overwrite != "y":
-            print("Operation aborted.")
-            return
+        if add_adapters:
+            print(f"{dest_path} already exists. Reusing it to add adapter settings.")
+        elif yes:
+            print(f"{dest_path} already exists. Overwriting (--yes flag set).")
+        else:
+            overwrite = input(f"{dest_path} already exists. Overwrite? (y/N): ").strip().lower()
+            if overwrite != "y":
+                print("Operation aborted.")
+                return
 
     os.makedirs(configs._SETTINGS_DIR, exist_ok=True)
 
-    if full:
+    if dest_path.exists() and add_adapters:
+        pass
+    elif full:
         print("Going to generate full settings.yaml.")
         sample_settings_path = str(resources.files("resources").joinpath("sample_settings.yaml"))
         with open(sample_settings_path, "rb") as src_file, open(dest_path, "wb") as dst_file:
@@ -119,6 +187,24 @@ def init_settings(full: bool = False):
         cfg = OmegaConf.create(configs.DEFAULT_SETTINGS)
         OmegaConf.save(cfg, dest_path)
         print(f"Generated default settings under {dest_path}.")
+
+    if dask:
+        from flowcept.flowceptor.adapters.dask.dask_dataclasses import DaskSettings
+
+        DaskSettings().save_settings()
+        print("Added adapters.dask settings.")
+
+    if mlflow:
+        from flowcept.flowceptor.adapters.mlflow.mlflow_dataclasses import MLFlowSettings
+
+        MLFlowSettings().save_settings()
+        print("Added adapters.mlflow settings.")
+
+    if tensorboard:
+        from flowcept.flowceptor.adapters.tensorboard.tensorboard_dataclasses import TensorboardSettings
+
+        TensorboardSettings().save_settings()
+        print("Added adapters.tensorboard settings.")
 
 
 def _resolve_user_settings_path() -> Path:
@@ -151,14 +237,20 @@ def _compute_profile_changes(cfg, profile_name: str):
 
 def apply_config_profile(config_profile: str, yes: bool = False):
     """
-    Apply a settings profile to the user settings file with confirmation.
+    Apply a settings profile overlay to the user settings file.
 
     Parameters
     ----------
     config_profile : str
-        Profile name. Supported values: full-online, full-offline.
+        Profile name. Supported values: full-online, full-telemetry, mq-only,
+        full-offline, mq-only-no-flush.
     yes : bool, optional
         If true, skip confirmation prompt and apply changes immediately.
+
+    Notes
+    -----
+    Profiles modify the existing file in place. They do not create a separate profile
+    file and they do not bypass runtime environment-variable overrides.
     """
     from omegaconf import OmegaConf
 
@@ -336,9 +428,49 @@ def start_consumption_services(bundle_exec_id: str = None, check_safe_stops: boo
 
 def stop_consumption_services():
     """
-    Stop the document inserter.
+    Stop the running consumption services process gracefully via MQ stop message.
     """
-    print("Not implemented yet.")
+    import signal as _signal
+    import time
+
+    import psutil
+
+    consumer_proc = None
+    for proc in psutil.process_iter(["pid", "cmdline", "status"]):
+        if proc.info["status"] in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD):
+            continue
+        cmdline = " ".join(proc.info["cmdline"] or [])
+        if "start-consumption-services" in cmdline and proc.pid != os.getpid():
+            consumer_proc = proc
+            break
+
+    if consumer_proc is None:
+        print("No running consumer found.")
+        return
+
+    # Graceful stop: send MQ stop message so the consumer flushes and closes LMDB cleanly.
+    try:
+        from flowcept.commons.daos.mq_dao.mq_dao_base import MQDao
+
+        mq = MQDao.build()
+        mq.send_document_inserter_stop()
+        print(f"Sent MQ stop to consumer (pid={consumer_proc.pid}). Waiting for exit...")
+    except Exception as e:
+        print(f"Could not send MQ stop ({e}). Falling back to SIGTERM.")
+        consumer_proc.send_signal(_signal.SIGTERM)
+        return
+
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            consumer_proc.status()
+        except psutil.NoSuchProcess:
+            print(f"Consumer (pid={consumer_proc.pid}) exited cleanly.")
+            return
+        time.sleep(0.5)
+
+    print("Consumer did not exit in time. Sending SIGTERM.")
+    consumer_proc.send_signal(_signal.SIGTERM)
 
 
 def start_services(with_mongo: bool = False):
@@ -432,14 +564,14 @@ def get_task(task_id: str):
     print(json.dumps(Flowcept.db.query(_query), indent=2, default=str))
 
 
-def start_agent():  # TODO: start with gui
+def _start_agent():  # TODO: start with gui
     """Start Flowcept agent."""
-    from flowcept.agents.flowcept_agent import main
+    from flowcept.agents.mcp.mcp_server import main
 
     main()
 
 
-def start_agent_gui(port: int = None):
+def _start_agent_gui(port: int = None):
     """Start Flowcept agent GUI service.
 
     Parameters
@@ -455,6 +587,106 @@ def start_agent_gui(port: int = None):
         cmd += f" --server.port {port}"
 
     _run_command(cmd, check_output=True)
+
+
+def start(
+    agent: bool = False,
+    webservice: bool = False,
+    ui: bool = False,
+    agent_gui: bool = False,
+    webservice_host: str = None,
+    webservice_port: str = None,
+    ui_dir: str = "ui",
+    port: int = None,
+):
+    """
+    Start Flowcept runtime services.
+
+    Parameters
+    ----------
+    agent : bool, optional
+        Start the Flowcept FastMCP agent service.
+    webservice : bool, optional
+        Start the Flowcept FastAPI webservice.
+    ui : bool, optional
+        Start the React frontend service. This also starts the FastAPI webservice.
+    agent_gui : bool, optional
+        Start the legacy Streamlit agent GUI service.
+    webservice_host : str, optional
+        Host interface for the webservice. Defaults to settings.yaml ``web_server.host``.
+    webservice_port : str, optional
+        Port for the webservice. Defaults to settings.yaml ``web_server.port``.
+    ui_dir : str, optional
+        Path to the UI directory containing package.json (default: ui).
+    port : int, optional
+        Port for the legacy agent GUI.
+    """
+    selected = [agent, webservice, ui, agent_gui]
+    if not any(selected):
+        print("Select at least one service: --agent, --webservice, --ui, or --agent-gui.")
+        return
+
+    if os.environ.get("FLOWCEPT_SKIP_START_CLEANUP") != "1":
+        _stop_existing_start_services(
+            agent=agent,
+            webservice=webservice,
+            ui=ui,
+            agent_gui=agent_gui,
+            webservice_port=webservice_port,
+            agent_gui_port=port,
+        )
+
+    if ui:
+        procs = []
+        if agent:
+            procs.append(_start_child_service(["--start", "--agent"], "Agent"))
+        if agent_gui:
+            agent_gui_args = ["--start", "--agent-gui"]
+            if port is not None:
+                agent_gui_args.extend(["--port", str(port)])
+            procs.append(_start_child_service(agent_gui_args, "Agent GUI"))
+        try:
+            _start_ui(
+                webservice_host=webservice_host,
+                webservice_port=webservice_port,
+                ui_dir=ui_dir,
+            )
+        finally:
+            _stop_child_services(procs)
+        return
+
+    if sum(bool(flag) for flag in selected) == 1:
+        if agent:
+            _start_agent()
+        elif webservice:
+            _start_webservice(webservice_host=webservice_host, webservice_port=webservice_port)
+        else:
+            _start_agent_gui(port=port)
+        return
+
+    procs = []
+    if agent:
+        procs.append(_start_child_service(["--start", "--agent"], "Agent"))
+    if webservice:
+        webservice_args = ["--start", "--webservice"]
+        if webservice_host is not None:
+            webservice_args.extend(["--webservice-host", webservice_host])
+        if webservice_port is not None:
+            webservice_args.extend(["--webservice-port", webservice_port])
+        procs.append(_start_child_service(webservice_args, "Webservice"))
+    if agent_gui:
+        agent_gui_args = ["--start", "--agent-gui"]
+        if port is not None:
+            agent_gui_args.extend(["--port", str(port)])
+        procs.append(_start_child_service(agent_gui_args, "Agent GUI"))
+
+    try:
+        while all(proc.poll() is None for proc in procs):
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _stop_child_services(procs)
 
 
 def agent_client(tool_name: str, kwargs: str = None):
@@ -476,7 +708,7 @@ def agent_client(tool_name: str, kwargs: str = None):
             print(f"Could not parse kwargs as a valid JSON: {kwargs}")
             print(e)
     print("-----------------")
-    from flowcept.agents.agent_client import run_tool
+    from flowcept.agents.mcp.mcp_client import run_tool
 
     result = run_tool(tool_name, kwargs)[0]
 
@@ -531,7 +763,7 @@ def check_services():
 
     if AGENT.get("enabled", False):
         print("Agent is enabled, so we are testing it too.")
-        from flowcept.agents.agent_client import run_tool
+        from flowcept.agents.mcp.mcp_client import run_tool
 
         try:
             print(run_tool("check_liveness"))
@@ -697,7 +929,7 @@ def start_redis() -> None:
     settings = getattr(configs, "settings", {}) or {}
     mq = settings.get("mq") or {}
 
-    if mq.get("type", None) != "redis":
+    if mq.get("type", "redis") != "redis":
         print("Your settings file needs to specify redis as the MQ type. Please fix it.")
         return
 
@@ -721,20 +953,140 @@ def start_redis() -> None:
         print(f"Failed to start Redis: {e}")
 
 
-def start_webservice(webservice_host: str = "127.0.0.1", webservice_port: str = "8008"):
+def stop_redis() -> None:
+    """
+    Stop the running Redis server via redis-cli shutdown.
+    """
+    from flowcept.configs import MQ_HOST, MQ_PORT
+
+    settings = getattr(configs, "settings", {}) or {}
+    bin_path = (settings.get("mq") or {}).get("bin", "")
+    redis_cli = str(bin_path).replace("redis-server", "redis-cli")
+
+    cmd = f"{shlex.quote(redis_cli)} -h {MQ_HOST} -p {MQ_PORT} shutdown nosave"
+    try:
+        subprocess.run(cmd, shell=True)
+        print("Redis stopped.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to stop Redis: {e}")
+
+
+def _listener_pids(port: int) -> List[str]:
+    """Return process IDs listening on *port*."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+    return result.stdout.split()
+
+
+def _pid_command(pid: str) -> str:
+    """Return a short command line for *pid*."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", pid, "-o", "command="],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "<unknown>"
+    return result.stdout.strip() or "<unknown>"
+
+
+def _kill_port(port: int, service_name: str = "service") -> bool:
+    """Kill processes listening on *port* and report what was stopped."""
+    pids = _listener_pids(port)
+    if not pids:
+        return False
+
+    for pid in pids:
+        print(f"Stopping stale {service_name} listener on port {port}: pid={pid}, cmd={_pid_command(pid)}")
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except Exception as exc:
+            print(f"Could not stop pid {pid} with SIGTERM: {exc}")
+
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        remaining = set(_listener_pids(port)) & set(pids)
+        if not remaining:
+            return True
+        time.sleep(0.1)
+
+    for pid in set(_listener_pids(port)) & set(pids):
+        print(f"Force stopping stale {service_name} listener on port {port}: pid={pid}")
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except Exception as exc:
+            print(f"Could not force stop pid {pid}: {exc}")
+    time.sleep(0.5)
+    return True
+
+
+def _stop_existing_start_services(
+    agent: bool = False,
+    webservice: bool = False,
+    ui: bool = False,
+    agent_gui: bool = False,
+    webservice_port: str = None,
+    agent_gui_port: int = None,
+) -> None:
+    """Stop already-running services requested by the unified start command."""
+    if webservice or ui:
+        _kill_port(int(webservice_port or configs.WEBSERVER_PORT), "Webservice")
+    if ui:
+        _kill_port(int(os.environ.get("VITE_DEV_PORT", "5173")), "React frontend")
+    if agent:
+        _kill_port(int(configs.AGENT_PORT), "Agent")
+    if agent_gui:
+        _kill_port(int(agent_gui_port or 8501), "Agent GUI")
+
+
+def _start_child_service(args: List[str], service_name: str) -> subprocess.Popen:
+    """Start a CLI child service and print its PID."""
+    env = os.environ.copy()
+    env["FLOWCEPT_SKIP_START_CLEANUP"] = "1"
+    proc = subprocess.Popen([sys.executable, "-m", "flowcept.cli", *args], env=env)
+    print(f"{service_name} started (pid {proc.pid}).")
+    return proc
+
+
+def _stop_child_services(procs: List[subprocess.Popen]) -> None:
+    """Terminate child services started by the unified start command."""
+    for proc in procs:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in procs:
+        if proc.poll() is None:
+            proc.wait()
+
+
+def _start_webservice(webservice_host: str = None, webservice_port: str = None):
     """
     Start the Flowcept FastAPI webservice locally.
+
+    Host and port default to ``web_server.host``/``web_server.port`` in
+    settings.yaml (or ``WEBSERVER_HOST``/``WEBSERVER_PORT`` env vars).
 
     Parameters
     ----------
     webservice_host : str, optional
-        Host interface to bind (default: 127.0.0.1).
-    webservice_port : int, optional
-        Port to bind (default: 8008).
+        Host interface to bind. Defaults to settings.yaml ``web_server.host``.
+    webservice_port : str, optional
+        Port to bind. Defaults to settings.yaml ``web_server.port``.
     """
-    host = webservice_host
-    port = webservice_port
-    print(f"Starting Flowcept webservice on http://{host}:{port}")
+    host = webservice_host or configs.WEBSERVER_HOST
+    port = webservice_port or str(configs.WEBSERVER_PORT)
+    print(f"Starting Flowcept FastAPI webservice on http://{host}:{port}")
+    print(f"API:          http://{host}:{port}/api/v1")
     print(f"Swagger UI:   http://{host}:{port}/docs")
     print(f"ReDoc:        http://{host}:{port}/redoc")
     print(f"OpenAPI JSON: http://{host}:{port}/openapi.json")
@@ -750,39 +1102,105 @@ def start_webservice(webservice_host: str = "127.0.0.1", webservice_port: str = 
     uvicorn.run(app, host=host, port=int(port))
 
 
-def generate_report(
-    input_path: str,
-    format: str = "markdown",
-    output_path: str = None,
+def _start_ui(
+    webservice_host: str = None,
+    webservice_port: str = None,
+    ui_dir: str = "ui",
 ):
     """
-    Generate a provenance report from a JSONL buffer file.
+    Start the Flowcept FastAPI webservice and React frontend service together.
+
+    Launches the webservice in the background and the React frontend service in
+    the foreground (Ctrl+C stops both).
+    Host and port default to ``web_server.host``/``web_server.port`` in
+    settings.yaml (or ``WEBSERVER_HOST``/``WEBSERVER_PORT`` env vars).
 
     Parameters
     ----------
-    input_path : str
-        Path to the Flowcept JSONL buffer file.
+    webservice_host : str, optional
+        Host interface for the webservice. Defaults to settings.yaml ``web_server.host``.
+    webservice_port : str, optional
+        Port for the webservice. Defaults to settings.yaml ``web_server.port``.
+    ui_dir : str, optional
+        Path to the UI directory containing package.json (default: ui).
+    """
+    import sys
+
+    webservice_host = webservice_host or configs.WEBSERVER_HOST
+    webservice_port = webservice_port or str(configs.WEBSERVER_PORT)
+    frontend_port = os.environ.get("VITE_DEV_PORT", "5173")
+
+    ws_proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "flowcept.cli",
+            "--start",
+            "--webservice",
+            "--webservice-host",
+            webservice_host,
+            "--webservice-port",
+            webservice_port,
+        ],
+        env={**os.environ, "FLOWCEPT_SKIP_START_CLEANUP": "1"},
+    )
+    print(f"FastAPI webservice started (pid {ws_proc.pid}) on http://{webservice_host}:{webservice_port}")
+    print("\n\n")
+    print("**********************************************************************************************")
+    print(f"Flowcept UI: http://localhost:{frontend_port} (proxies /api to :{webservice_port})")
+    print("**********************************************************************************************")
+    print("\n\n")
+    try:
+        subprocess.run(["npm", "run", "dev", "--prefix", ui_dir], check=False)
+    finally:
+        ws_proc.terminate()
+        ws_proc.wait()
+
+
+def generate_report(
+    format: str = "markdown",
+    output_path: str = None,
+    input_path: str = None,
+    workflow_id: str = None,
+):
+    """
+    Generate a provenance report from a JSONL buffer file or a workflow ID.
+
+    Parameters
+    ----------
     format : str, optional
         Output format: markdown (default) or pdf.
     output_path : str, optional
-        Output report path. If omitted, defaults to PROVENANCE_CARD.md for markdown
+        Output report path. If omitted, defaults to WORKFLOW_CARD.md for markdown
         and PROVENANCE_REPORT.pdf for pdf.
+    input_path : str, optional
+        Path to the Flowcept JSONL buffer file.
+    workflow_id : str, optional
+        Workflow ID to query from the configured database (MongoDB first, then LMDB).
     """
     from flowcept import Flowcept
+
+    if not input_path and not workflow_id:
+        print("Provide either --input-path or --workflow-id.")
+        return
+    if input_path and workflow_id:
+        print("Provide either --input-path or --workflow-id, not both.")
+        return
 
     report_format = (format or "markdown").strip().lower()
     if report_format not in {"markdown", "pdf"}:
         print("Unsupported format. Use 'markdown' or 'pdf'.")
         return
 
-    report_type = "provenance_card" if report_format == "markdown" else "provenance_report"
+    report_type = "workflow_card" if report_format == "markdown" else "provenance_report"
     resolved_output_path = output_path
     if not resolved_output_path:
-        resolved_output_path = "PROVENANCE_CARD.md" if report_format == "markdown" else "PROVENANCE_REPORT.pdf"
+        resolved_output_path = "WORKFLOW_CARD.md" if report_format == "markdown" else "PROVENANCE_REPORT.pdf"
 
     stats = Flowcept.generate_report(
         report_type=report_type,
         input_jsonl_path=input_path,
+        workflow_id=workflow_id,
         format=report_format,
         output_path=resolved_output_path,
     )
@@ -791,12 +1209,12 @@ def generate_report(
 
 
 COMMAND_GROUPS = [
-    ("Basic Commands", [version, check_services, show_settings, init_settings, start_services, stop_services]),
+    ("Basic Commands", [version, check_services, show_settings, init_settings, start, start_services, stop_services]),
     ("Consumption Commands", [start_consumption_services, stop_consumption_services, stream_messages]),
     ("Database Commands", [workflow_count, query, get_task]),
     ("Report Commands", [generate_report]),
-    ("Agent Commands", [start_agent, agent_client, start_agent_gui]),
-    ("External Services", [start_mongo, start_redis, start_webservice]),
+    ("Agent Commands", [agent_client]),
+    ("External Services", [start_mongo, start_redis, stop_redis]),
 ]
 
 COMMANDS = set(f for _, fs in COMMAND_GROUPS for f in fs)
@@ -862,13 +1280,16 @@ def _parse_numpy_doc(docstring: str):
 @no_docstring
 def main():  # noqa: D103
     parser = argparse.ArgumentParser(
-        description="Flowcept CLI", formatter_class=argparse.RawTextHelpFormatter, add_help=False
+        description="Flowcept CLI",
+        formatter_class=argparse.RawTextHelpFormatter,
+        add_help=False,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--config-profile",
         type=str,
         choices=sorted(CONFIG_PROFILES.keys()),
-        help="Apply a predefined settings profile: full-online or full-offline.",
+        help="Apply a predefined settings profile: full-online, mq-only, or full-offline.",
     )
     parser.add_argument(
         "-y",
@@ -877,6 +1298,7 @@ def main():  # noqa: D103
         help="Auto-confirm profile application (used with --config-profile).",
     )
 
+    registered_param_args = set()
     for func in COMMANDS:
         doc = func.__doc__ or ""
         func_name = func.__name__
@@ -885,12 +1307,19 @@ def main():  # noqa: D103
         parser.add_argument(flag, action="store_true", help=short_help)
 
         for pname, param in inspect.signature(func).parameters.items():
+            if pname == "yes":  # already registered as a global -y/--yes flag
+                continue
             arg_name = f"--{pname.replace('_', '-')}"
+            if arg_name in registered_param_args:
+                continue
+            registered_param_args.add(arg_name)
             params_doc = _parse_numpy_doc(doc).get(pname, {})
 
             help_text = f"{params_doc.get('type', '')} - {params_doc.get('desc', '').strip()}"
             if param.annotation is bool:
                 parser.add_argument(arg_name, action="store_true", help=help_text)
+            elif param.annotation is int:
+                parser.add_argument(arg_name, type=int, help=help_text)
             elif param.annotation == List[str]:
                 parser.add_argument(arg_name, type=lambda s: s.split(","), help=help_text)
             else:
@@ -925,8 +1354,14 @@ def main():  # noqa: D103
         print("Profile Commands:\n")
         print("  flowcept --config-profile full-online [-y]")
         print("      Configure settings for fully online mode (MQ + KV + Mongo enabled).")
+        print("  flowcept --config-profile mq-only [-y]")
+        print("      Configure settings for MQ-only mode (MQ enabled; KV and DocDBs disabled).")
         print("  flowcept --config-profile full-offline [-y]")
         print("      Configure settings for fully offline mode (MQ + KV + Mongo disabled).")
+        print("  flowcept --config-profile mq-only-no-flush [-y]")
+        print("      MQ enabled, no persistent DBs. Tasks accumulate locally and are bulk-published")
+        print("      to MQ in a single end-of-run flush. Also dumps to local JSONL.")
+        print("      Use with Flowcept(check_safe_stops=False).")
         print("")
         for group, funcs in COMMAND_GROUPS:
             print(f"{group}:\n")

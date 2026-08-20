@@ -101,7 +101,7 @@ def summarize_objects(objects: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     object_sizes: List[int] = []
 
     for obj in objects:
-        obj_type = str(obj.get("type", "unknown"))
+        obj_type = str(obj.get("object_type", "unknown"))
         by_type[obj_type] += 1
         storage_type = obj.get("storage_type")
         if storage_type == "in_object":
@@ -136,6 +136,36 @@ def summarize_objects(objects: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_size_bytes": (sum(object_sizes) / len(object_sizes)) if object_sizes else None,
         "max_size_bytes": max(object_sizes) if object_sizes else None,
     }
+
+
+def group_activities_by_workflow(tasks: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Return ``{workflow_id: [activity_rows]}`` for cross-run comparisons."""
+    by_workflow: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for t in tasks:
+        wid = str(t.get("workflow_id", "unknown"))
+        by_workflow[wid].append(t)
+    return {wid: group_activities(wf_tasks) for wid, wf_tasks in by_workflow.items()}
+
+
+def extract_hostnames_from_workflow(workflow: Dict[str, Any]) -> List[str]:
+    """Extract unique hostnames from a workflow's ``machine_info`` dict.
+
+    ``machine_info`` is keyed by interceptor instance id; each value may
+    contain a ``hostname`` field.  Falls back to ``workflow.get('hostname')``.
+    """
+    hostnames: List[str] = []
+    machine_info = workflow.get("machine_info")
+    if isinstance(machine_info, dict):
+        for entry in machine_info.values():
+            if isinstance(entry, dict):
+                h = entry.get("hostname")
+                if h and isinstance(h, str):
+                    hostnames.append(h)
+    if not hostnames:
+        h = workflow.get("hostname")
+        if h and isinstance(h, str):
+            hostnames.append(h)
+    return list(dict.fromkeys(hostnames))  # deduplicate, preserve order
 
 
 def workflow_bounds(tasks: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float], Optional[float]]:

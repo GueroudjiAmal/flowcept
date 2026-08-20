@@ -8,18 +8,23 @@ Quick Start
 
 The easiest way to capture provenance from plain Python functions—no external services required.
 
-Install and Initialize
-----------------------
+Install
+-------
 
-First, install Flowcept and initialize a settings file:
+First, install Flowcept:
 
 .. code-block:: bash
 
    # Make sure you activate your Python environment (conda, venv, etc.)
    pip install flowcept
-   flowcept --init-settings
 
-This creates a minimal settings file at ``~/.flowcept/settings.yaml``.
+The simplest offline path does not require a settings file. If you need the
+full config structure for online services, adapters, telemetry, or deployment
+profiles, use:
+
+.. code-block:: bash
+
+   flowcept --init-settings --full
 
 Run a Minimal Example
 ---------------------
@@ -32,8 +37,6 @@ Save the following script as ``quickstart.py`` and run ``python quickstart.py``:
    Minimal example of Flowcept's instrumentation using decorators.
    No DB, broker, or external service required.
    """
-   import json
-
    from flowcept import Flowcept, flowcept_task
    from flowcept.instrumentation.flowcept_decorator import flowcept
 
@@ -59,9 +62,8 @@ Save the following script as ``quickstart.py`` and run ``python quickstart.py``:
    if __name__ == "__main__":
        main()
 
-       prov_buffer = Flowcept.read_buffer_file()
-       assert len(prov_buffer) == 2
-       print(json.dumps(prov_buffer, indent=2))
+       # print(Flowcept.read_buffer_file())  # inspect raw JSONL records if needed
+       Flowcept.generate_report(print_markdown=True)
 
 Inspecting the Output
 ---------------------
@@ -104,4 +106,3 @@ Examples:
 
 - `Examples directory <https://github.com/ORNL/flowcept/tree/main/examples>`_
 - `Jupyter Notebooks <https://github.com/ORNL/flowcept/tree/main/notebooks>`_
-

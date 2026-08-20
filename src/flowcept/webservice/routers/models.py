@@ -1,4 +1,4 @@
-"""ML model object endpoints (type=ml_model)."""
+"""ML model object endpoints (object_type=ml_model)."""
 
 import json
 from typing import Any, Dict
@@ -7,9 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from flowcept.flowcept_api.db_api import DBAPI
-from flowcept.webservice.deps import get_db_api
 from flowcept.webservice.schemas.common import ListResponse, ObjectQueryRequest
-from flowcept.webservice.services.serializers import normalize_docs
+from flowcept.commons.utils import normalize_docs
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -45,11 +44,11 @@ def list_models(
     object_id: str | None = None,
     filter_json: str | None = None,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ) -> ListResponse:
     """List ML model objects with optional filters."""
     query_filter = _json_filter(filter_json)
-    query_filter["type"] = "ml_model"
+    query_filter["object_type"] = "ml_model"
     if workflow_id is not None:
         query_filter["workflow_id"] = workflow_id
     if task_id is not None:
@@ -67,7 +66,7 @@ def get_model(
     object_id: str,
     version: int | None = None,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Get ML model object metadata by id and optional version."""
     try:
@@ -75,7 +74,7 @@ def get_model(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if blob is None or getattr(blob, "type", None) != "ml_model":
+    if blob is None or getattr(blob, "object_type", None) != "ml_model":
         raise HTTPException(status_code=404, detail=f"Model not found: {object_id}")
 
     return normalize_docs([blob.to_dict()], include_data=include_data)[0]
@@ -86,7 +85,7 @@ def get_model_version(
     object_id: str,
     version: int,
     include_data: bool = False,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Get a specific ML model object version."""
     return get_model(object_id=object_id, version=version, include_data=include_data, db=db)
@@ -96,7 +95,7 @@ def get_model_version(
 def download_model(
     object_id: str,
     version: int | None = None,
-    db: DBAPI = Depends(get_db_api),
+    db: DBAPI = Depends(DBAPI),
 ):
     """Download ML model payload as a binary attachment."""
     try:
@@ -104,7 +103,7 @@ def download_model(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if blob is None or getattr(blob, "type", None) != "ml_model":
+    if blob is None or getattr(blob, "object_type", None) != "ml_model":
         raise HTTPException(status_code=404, detail=f"Model not found: {object_id}")
 
     doc = blob.to_dict()
@@ -118,10 +117,10 @@ def download_model(
 
 
 @router.post("/query", response_model=ListResponse)
-def query_models(payload: ObjectQueryRequest, db: DBAPI = Depends(get_db_api)):
+def query_models(payload: ObjectQueryRequest, db: DBAPI = Depends(DBAPI)):
     """Run an advanced read-only query for ML model objects."""
     query_filter = dict(payload.filter)
-    query_filter["type"] = "ml_model"
+    query_filter["object_type"] = "ml_model"
     docs = db.query(
         collection="objects",
         filter=query_filter,

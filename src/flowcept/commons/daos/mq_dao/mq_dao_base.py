@@ -58,6 +58,10 @@ class MQDao(object):
             from flowcept.commons.daos.mq_dao.mq_dao_diaspora import MQDaoDiaspora
 
             return MQDaoDiaspora(*args, **kwargs)
+        elif MQ_TYPE == "rabbitmq":
+            from flowcept.commons.daos.mq_dao.mq_dao_rabbitmq import MQDaoRabbitMQ
+
+            return MQDaoRabbitMQ(*args, **kwargs)
         else:
             raise NotImplementedError
 
@@ -190,6 +194,8 @@ class MQDao(object):
             else:
                 self.logger.error("MQ time-based flushing is not started")
         else:
+            if MQ_ENABLED and self.buffer:
+                self.bulk_publish(self.buffer)  # end-of-run single flush to Redis
             self.buffer = list()
 
         self.logger.debug("Buffer closed.")

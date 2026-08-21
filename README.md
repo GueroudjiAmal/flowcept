@@ -358,6 +358,12 @@ Runnable examples for each framework are in [`examples/agents/`](examples/agents
 - [`examples/agents/crewai/crewai_example.py`](examples/agents/crewai/crewai_example.py)
 - [`examples/agents/autogen/autogen_example.py`](examples/agents/autogen/autogen_example.py)
 - [`examples/agents/combined_agentic_systems/combined_example.py`](examples/agents/combined_agentic_systems/combined_example.py) — all four frameworks running concurrently
+- [`examples/agents/langchain/langchain_example.py`](examples/agents/langchain/langchain_example.py) — LangChain callback handler capture with a fake chat model (runs offline)
+- [`examples/agents/openai_agents/openai_agents_example.py`](examples/agents/openai_agents/openai_agents_example.py) — OpenAI Agents SDK tracing processor; runs a real agent with `OPENAI_API_KEY`, or synthetic SDK spans offline
+- [`examples/agents/otel/otel_example.py`](examples/agents/otel/otel_example.py) — OpenTelemetry GenAI span exporter fed by synthetic spans (runs offline)
+- [`examples/agents/cli_harness/cli_harness_example.py`](examples/agents/cli_harness/cli_harness_example.py) — profile-driven CLI-harness adapter, replaying Codex-style hook events (runs offline)
+- [`examples/agents/claude_code/claude_code_example.py`](examples/agents/claude_code/claude_code_example.py) — Claude Code install walkthrough plus a simulated hook-event replay (runs offline)
+- [`examples/agents/claude_agent_sdk/claude_agent_sdk_example.py`](examples/agents/claude_agent_sdk/claude_agent_sdk_example.py) — `trace_query` drop-in for `claude_agent_sdk.query` (requires `ANTHROPIC_API_KEY`)
 
 ## AI Coding Harness Provenance Plugins
 

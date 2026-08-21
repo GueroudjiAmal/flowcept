@@ -142,10 +142,12 @@ class Profile:
         )
 
     def kind_for(self, event_name: str) -> str | None:
+        """Return the event kind mapped to *event_name*, or None if unmapped."""
         key = _normalize_event_name(event_name)
         return self.events.get(key) or DEFAULT_EVENTS.get(key)
 
     def keys_for(self, field: str) -> list[str]:
+        """Return the payload keys to try when extracting *field*."""
         configured = self.fields.get(field)
         if configured is None:
             return DEFAULT_FIELDS.get(field, [field])

@@ -404,8 +404,9 @@ class _FlowceptCrewAIListener:
 
 def _build_listener_class(interceptor: Any, stats: _ProvenanceStats | None):
     """
-    Lazily build a concrete BaseEventListener subclass so crewai is only
-    imported when the plugin is actually used.
+    Lazily build a concrete BaseEventListener subclass.
+
+    Ensures crewai is only imported when the plugin is actually used.
     Registers only lifecycle events (crew, task, agent).
     LLM and tool calls are captured via hooks (richer data).
     """
@@ -446,7 +447,7 @@ def _build_listener_class(interceptor: Any, stats: _ProvenanceStats | None):
 
 class _FlowceptCrewAIHooks:
     """
-    Registers CrewAI's before/after LLM and tool hooks to capture rich provenance:
+    Registers CrewAI's before/after LLM and tool hooks to capture rich provenance.
 
     LLM hooks give:
       - Full message list (context.messages)  — not just serialised dicts
@@ -1038,8 +1039,9 @@ def anthropic_chat(
 
 class FlowceptAnthropicClient:
     """
-    Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
-    every ``messages.create`` / ``messages.stream`` call as a FlowCept
+    Wrap an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client for provenance capture.
+
+    Records every ``messages.create`` / ``messages.stream`` call as a FlowCept
     provenance record (subtype=llm_call) via ``record_llm_call()``.
 
     Usage::
@@ -1062,6 +1064,7 @@ class FlowceptAnthropicClient:
         self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
 
     def __getattr__(self, name):
+        """Delegate attribute access to the wrapped client."""
         return getattr(self._inner, name)
 
 
@@ -1281,9 +1284,10 @@ class FlowceptCrewAIPlugin:
         config: dict | None = None,
     ) -> "FlowceptCrewAIPlugin":
         """
-        Create a CrewAI plugin that shares the buffer of a running
-        FlowceptAcademyPlugin.  All provenance records land in the same
-        JSONL file when the Academy plugin stops.
+        Create a CrewAI plugin that shares the buffer of a running FlowceptAcademyPlugin.
+
+        All provenance records land in the same JSONL file when the Academy
+        plugin stops.
         """
         interceptor = academy_plugin._interceptor
         inst = cls(config=config, _shared_interceptor=interceptor)
@@ -1301,6 +1305,7 @@ class FlowceptCrewAIPlugin:
         return inst
 
     def start(self) -> "FlowceptCrewAIPlugin":
+        """Start provenance capture: register listeners, hooks, and the interceptor."""
         if not self._enabled or self._started:
             return self
         if not self._owns_interceptor:
@@ -1337,6 +1342,7 @@ class FlowceptCrewAIPlugin:
         return self
 
     def stop(self) -> None:
+        """Stop provenance capture: unregister hooks and flush records."""
         if not self._started:
             return
         self._unregister_hooks()
@@ -1382,7 +1388,9 @@ class FlowceptCrewAIPlugin:
             print(f"[FlowceptCrewAIPlugin] Warning: could not write perf CSV — {e!r}", flush=True)
 
     def __enter__(self) -> "FlowceptCrewAIPlugin":
+        """Start the plugin when entering a context manager block."""
         return self.start()
 
     def __exit__(self, *_: Any) -> None:
+        """Stop the plugin when exiting a context manager block."""
         self.stop()

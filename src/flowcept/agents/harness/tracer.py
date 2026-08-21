@@ -103,10 +103,12 @@ class SessionTracer:
         return self.event(EventKind.SESSION_END, source=source, **fields)
 
     def __enter__(self) -> SessionTracer:
+        """Start the session and return the tracer."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        """End the session, marking it as errored if an exception escaped."""
         self.end(source="error" if exc_type else "completed")
         return False
 
@@ -256,9 +258,11 @@ class SessionTracer:
     # -- lifecycle -----------------------------------------------------------
 
     def notify(self, message: str, **fields: Any):
+        """Record a notification event carrying ``message``."""
         return self.event(EventKind.NOTIFICATION, message=message, **fields)
 
     def compact(self, *, source: str | None = None, **fields: Any):
+        """Record a context-compaction event."""
         return self.event(EventKind.COMPACT, source=source, **fields)
 
 

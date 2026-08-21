@@ -102,12 +102,15 @@ class SessionState:
     # -- accessors ---------------------------------------------------------
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Return the value stored under ``key``, or ``default`` if absent."""
         return self.data.get(key, default)
 
     def set(self, key: str, value: Any) -> None:
+        """Store ``value`` under ``key``."""
         self.data[key] = value
 
     def setdefault(self, key: str, value: Any) -> Any:
+        """Store ``value`` under ``key`` only if absent, returning the stored value."""
         return self.data.setdefault(key, value)
 
     def mark_once(self, key: str) -> bool:
@@ -125,12 +128,14 @@ class SessionState:
     # -- pending tool calls ------------------------------------------------
 
     def add_pending(self, key: str, payload: dict[str, Any]) -> None:
+        """Record an in-flight tool call under ``key``, pruning stale entries."""
         pending = self.data.setdefault("pending_tools", {})
         payload.setdefault("recorded_at", time.time())
         pending[key] = payload
         self._prune_pending(pending)
 
     def pop_pending(self, key: str) -> dict[str, Any] | None:
+        """Remove and return the pending tool call under ``key``, if any."""
         pending = self.data.setdefault("pending_tools", {})
         value = pending.pop(key, None)
         self._prune_pending(pending)

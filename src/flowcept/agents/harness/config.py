@@ -116,25 +116,31 @@ class Config:
         self.debug = debug
 
     def __repr__(self) -> str:
+        """Return a debug representation listing every configured field."""
         fields = ", ".join(f"{name}={getattr(self, name)!r}" for name in self.__slots__)
         return f"Config({fields})"
 
     @property
     def sessions_dir(self) -> Path:
+        """Directory holding per-session state files."""
         return self.home / "sessions"
 
     @property
     def buffers_dir(self) -> Path:
+        """Directory holding JSONL buffer files, honoring any override."""
         return self.buffer_dir or (self.home / "buffers")
 
     @property
     def log_path(self) -> Path:
+        """Path of the harness debug log file."""
         return self.home / "harness.log"
 
     def buffer_path(self, workflow_id: str) -> Path:
+        """Return the JSONL buffer file path for ``workflow_id``."""
         return self.buffers_dir / f"{workflow_id}.jsonl"
 
     def state_path(self, workflow_id: str) -> Path:
+        """Return the session state file path for ``workflow_id``."""
         return self.sessions_dir / f"{workflow_id}.json"
 
 

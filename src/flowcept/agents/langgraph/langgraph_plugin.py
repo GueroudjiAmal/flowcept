@@ -43,6 +43,7 @@ Or as a context manager:
 from __future__ import annotations
 
 import os
+import threading
 import time
 import uuid
 import logging
@@ -55,8 +56,6 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Provenance overhead timer (identical to flowcept_plugin.py)
 # ---------------------------------------------------------------------------
-
-import threading
 
 
 class _ProvenanceStats:
@@ -143,6 +142,7 @@ class LangGraphInterceptor:
         self._campaign_id: str | None = None
 
     def start(self, workflow_name: str, campaign_id: str | None = None) -> None:
+        """Start the interceptor and emit the top-level WorkflowObject."""
         from flowcept.flowceptor.adapters.base_interceptor import BaseInterceptor
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
 
@@ -162,6 +162,7 @@ class LangGraphInterceptor:
         self._interceptor.send_workflow_message(wf)
 
     def stop(self) -> None:
+        """Stop the interceptor, flushing any buffered provenance."""
         if self._interceptor is None:
             return
         try:
@@ -172,6 +173,7 @@ class LangGraphInterceptor:
 
     @property
     def telemetry_capture(self):
+        """Return the interceptor's TelemetryCapture, or None when not started."""
         return self._interceptor.telemetry_capture if self._interceptor else None
 
     def send_graph_workflow(self, graph_name: str, group_id: str) -> str:
@@ -190,6 +192,7 @@ class LangGraphInterceptor:
         return wf.workflow_id
 
     def intercept_task(self, task_dict: dict) -> None:
+        """Enrich a task dict with ids and status, then send it to the interceptor."""
         if self._interceptor is None:
             return
         from flowcept.commons.flowcept_dataclasses.task_object import TaskObject
@@ -257,7 +260,7 @@ class FlowceptLangGraphCallback:
         tags: list[str] | None,
         parent_run_id=None,
     ) -> bool:
-        """True when the chain event represents a top-level LangGraph graph invocation.
+        """Return True when the chain event represents a top-level LangGraph graph invocation.
 
         Primary signal: parent_run_id is None (no enclosing run → this IS the graph).
         Secondary signal: serialized id / tags for belt-and-suspenders detection.
@@ -321,6 +324,7 @@ class FlowceptLangGraphCallback:
         name: str | None = None,
         **kwargs: Any,
     ) -> None:
+        """Buffer a task skeleton for a starting graph or node run."""
         t0 = time.perf_counter()
         self._run_start[run_id] = time.time()
         self._run_tel_start[run_id] = self._tel()
@@ -398,6 +402,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the completed graph or node task with outputs and telemetry."""
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
         tel_start = self._run_tel_start.pop(run_id, None)
@@ -436,6 +441,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the failed graph or node task with ERROR status."""
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
         tel_start = self._run_tel_start.pop(run_id, None)
@@ -471,6 +477,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Buffer an llm_call task skeleton for a starting LLM run."""
         t0 = time.perf_counter()
         self._run_start[run_id] = time.time()
         self._run_tel_start[run_id] = self._tel()
@@ -507,6 +514,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the completed llm_call task with response text and token usage."""
         t0 = time.perf_counter()
         self._run_start.pop(run_id, time.time())
         tel_start = self._run_tel_start.pop(run_id, None)
@@ -563,6 +571,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the failed llm_call task with ERROR status."""
         t0 = time.perf_counter()
         self._run_start.pop(run_id, None)
         tel_start = self._run_tel_start.pop(run_id, None)
@@ -593,6 +602,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Buffer an llm_call task skeleton for a starting chat-model run."""
         t0 = time.perf_counter()
         self._run_start[run_id] = time.time()
         self._run_tel_start[run_id] = self._tel()
@@ -638,6 +648,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Buffer a tool_call task skeleton for a starting tool run."""
         t0 = time.perf_counter()
         self._run_start[run_id] = time.time()
         self._run_tel_start[run_id] = self._tel()
@@ -676,6 +687,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the completed tool_call task with its output and telemetry."""
         t0 = time.perf_counter()
         tel_start = self._run_tel_start.pop(run_id, None)
         tel_end = self._tel()
@@ -707,6 +719,7 @@ class FlowceptLangGraphCallback:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Emit the failed tool_call task with ERROR status."""
         t0 = time.perf_counter()
         tel_start = self._run_tel_start.pop(run_id, None)
         self._run_start.pop(run_id, None)
@@ -728,9 +741,9 @@ class FlowceptLangGraphCallback:
 
 
 def _build_handler_class():
-    """
-    Lazily build a concrete BaseCallbackHandler subclass so LangChain/LangGraph
-    is only imported when the plugin is actually used.
+    """Lazily build a concrete BaseCallbackHandler subclass.
+
+    Keeps LangChain/LangGraph imported only when the plugin is actually used.
     """
     from langchain_core.callbacks import BaseCallbackHandler
 
@@ -1092,7 +1105,8 @@ def anthropic_chat(
 
 
 class FlowceptAnthropicClient:
-    """
+    """Anthropic client wrapper that records every model call as FlowCept provenance.
+
     Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
     every ``messages.create`` / ``messages.stream`` call as a FlowCept
     provenance record (subtype=llm_call) via ``record_llm_call()``.
@@ -1117,6 +1131,7 @@ class FlowceptAnthropicClient:
         self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
 
     def __getattr__(self, name):
+        """Delegate every other attribute to the wrapped Anthropic client."""
         return getattr(self._inner, name)
 
 
@@ -1300,9 +1315,7 @@ class FlowceptLangGraphPlugin:
         academy_plugin: Any,
         config: dict | None = None,
     ) -> "FlowceptLangGraphPlugin":
-        """
-        Create a LangGraph plugin that shares the buffer of an already-started
-        FlowceptAcademyPlugin.
+        """Create a LangGraph plugin sharing an already-started FlowceptAcademyPlugin's buffer.
 
         All provenance records — from both Academy agents and LangGraph nodes —
         are written to the exact same FlowCept in-memory buffer and end up in
@@ -1358,8 +1371,8 @@ class FlowceptLangGraphPlugin:
 
     @property
     def callback_handler(self) -> FlowceptLangGraphCallback:
-        """
-        The LangChain callback handler to pass as ``config={"callbacks": [...]}``.
+        """Return the LangChain callback handler to pass as ``config={"callbacks": [...]}``.
+
         Call ``start()`` before accessing this property.
         """
         if self._handler is None:
@@ -1367,6 +1380,7 @@ class FlowceptLangGraphPlugin:
         return self._handler
 
     def start(self) -> "FlowceptLangGraphPlugin":
+        """Start provenance capture and build the callback handler."""
         global _HANDLER_CLASS, _ACTIVE_INTERCEPTOR, _PROV_STATS
         if not self._enabled or self._started:
             return self
@@ -1406,6 +1420,7 @@ class FlowceptLangGraphPlugin:
         return self
 
     def stop(self) -> None:
+        """Stop provenance capture, flush the buffer, and report overhead stats."""
         global _ACTIVE_INTERCEPTOR, _PROV_STATS
         if not self._started:
             return
@@ -1458,9 +1473,11 @@ class FlowceptLangGraphPlugin:
                 )
 
     def __enter__(self) -> "FlowceptLangGraphPlugin":
+        """Start the plugin when entering a ``with`` block."""
         return self.start()
 
     def __exit__(self, *_: Any) -> None:
+        """Stop the plugin when leaving a ``with`` block."""
         self.stop()
 
 

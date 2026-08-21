@@ -86,16 +86,19 @@ class FlowceptCallbackHandler:
         parent_run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Open a turn when a root chain or graph run starts."""
         if parent_run_id is not None or self._turn_run is not None:
             return  # nested run: structure only
         self._open_turn(_key(run_id), _as_text(_unwrap_input(inputs)))
 
     def on_chain_end(self, outputs: Any, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the turn with the root chain's outputs as the response."""
         if self._turn_run != _key(run_id):
             return
         self._close_turn(response=_as_text(_unwrap_output(outputs)))
 
     def on_chain_error(self, error: BaseException, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the turn with the root chain's error."""
         if self._turn_run != _key(run_id):
             return
         self._close_turn(error=_error_text(error))
@@ -112,6 +115,7 @@ class FlowceptCallbackHandler:
         invocation_params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Remember the model and prompt of a starting LLM run."""
         key = _key(run_id)
         model = _model_name(serialized, invocation_params, kwargs)
         self._models[key] = model
@@ -131,6 +135,7 @@ class FlowceptCallbackHandler:
         invocation_params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Handle a starting chat-model run as an LLM run with flattened messages."""
         self.on_llm_start(
             serialized,
             [_messages_text(messages)] if messages is not None else None,
@@ -141,6 +146,7 @@ class FlowceptCallbackHandler:
         )
 
     def on_llm_end(self, response: Any, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Record the completed LLM run as an ``ai_model_invocation`` task."""
         key = _key(run_id)
         model, usage = _llm_result_details(response)
         self.tracer.llm_call(
@@ -155,6 +161,7 @@ class FlowceptCallbackHandler:
             self._close_turn(response=_generations_text(response))
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Record the failed LLM run with its error text."""
         key = _key(run_id)
         self.tracer.llm_call(
             model=self._models.pop(key, None),
@@ -176,16 +183,19 @@ class FlowceptCallbackHandler:
         inputs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Record the start of a tool run as an ``agent_tool`` task."""
         key = _key(run_id)
         name = (serialized or {}).get("name") or "tool"
         self._tools[key] = name
         self.tracer.tool_start(name, inputs if inputs is not None else input_str, tool_use_id=key)
 
     def on_tool_end(self, output: Any, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the tool run's task with its output."""
         key = _key(run_id)
         self.tracer.tool_end(key, name=self._tools.pop(key, None), tool_response=_jsonable(output))
 
     def on_tool_error(self, error: BaseException, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the tool run's task with its error."""
         key = _key(run_id)
         self.tracer.tool_end(key, name=self._tools.pop(key, None), error=_error_text(error))
 
@@ -197,12 +207,14 @@ class FlowceptCallbackHandler:
         run_id: UUID | None = None,
         **kwargs: Any,
     ) -> None:
+        """Record the start of a retriever run as an ``agent_tool`` task."""
         key = _key(run_id)
         name = (serialized or {}).get("name") or "retriever"
         self._tools[key] = name
         self.tracer.tool_start(name, {"query": query}, tool_use_id=key)
 
     def on_retriever_end(self, documents: Any, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the retriever run's task with the retrieved documents."""
         key = _key(run_id)
         self.tracer.tool_end(
             key,
@@ -211,6 +223,7 @@ class FlowceptCallbackHandler:
         )
 
     def on_retriever_error(self, error: BaseException, *, run_id: UUID | None = None, **kwargs: Any) -> None:
+        """Close the retriever run's task with its error."""
         key = _key(run_id)
         self.tracer.tool_end(key, name=self._tools.pop(key, None), error=_error_text(error))
 
@@ -237,9 +250,11 @@ class FlowceptCallbackHandler:
         self.tracer.end(source="error" if error else "completed")
 
     def __enter__(self) -> FlowceptCallbackHandler:
+        """Return the handler itself for use as a context manager."""
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        """Close the session, recording the in-flight exception if any."""
         self.close(error=f"{exc_type.__name__}: {exc}" if exc_type else None)
         return False
 

@@ -113,6 +113,7 @@ def cmd_hook(args, config: Config) -> int:
 
 
 def cmd_status(args, config: Config) -> int:
+    """Print configuration, capture health, and optionally probe the backend."""
     buffers = _buffers(config)
     print(f"flowcept-harness {__version__}")
     print(f"  enabled:      {config.enabled}")
@@ -141,6 +142,7 @@ def cmd_status(args, config: Config) -> int:
 
 
 def cmd_sessions(args, config: Config) -> int:
+    """List captured sessions, newest first."""
     buffers = _buffers(config)
     if not buffers:
         print(f"No sessions captured yet under {config.buffers_dir}")
@@ -159,6 +161,7 @@ def cmd_sessions(args, config: Config) -> int:
 
 
 def cmd_show(args, config: Config) -> int:
+    """Show the recorded activity of one session, with subagent work indented."""
     paths = _resolve_inputs(config, args.input, want_all=False)
     if not paths:
         print("No session to show.", file=sys.stderr)
@@ -241,6 +244,7 @@ def cmd_flush(args, config: Config) -> int:
 
 
 def cmd_report(args, config: Config) -> int:
+    """Generate a Flowcept report from a captured buffer file."""
     try:
         from flowcept import Flowcept
     except ImportError:
@@ -315,6 +319,7 @@ def cmd_install(args, config: Config) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for the ``flowcept-harness`` command."""
     parser = argparse.ArgumentParser(
         prog="flowcept-harness",
         description="PROV-AGENT provenance capture for AI coding harnesses.",
@@ -368,6 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse arguments, load the configuration, and dispatch to a subcommand."""
     args = build_parser().parse_args(argv)
     if args.home:
         os.environ["FLOWCEPT_HARNESS_HOME"] = args.home

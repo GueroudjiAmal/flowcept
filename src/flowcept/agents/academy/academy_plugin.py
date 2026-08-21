@@ -64,7 +64,10 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +231,9 @@ _CAPTURE_LLM_TYPES = frozenset(
 
 class AcademyInterceptor:
     """
-    Wraps FlowCept's BaseInterceptor directly (Dask-style) and exposes:
+    Wrap FlowCept's BaseInterceptor directly (Dask-style).
+
+    Exposes:
       - start(workflow_name)       — initialises the interceptor and MQDao
       - stop()                     — flushes and closes the interceptor
       - intercept_task(task_dict)  — enriches with FlowCept standard fields and sends
@@ -242,6 +247,7 @@ class AcademyInterceptor:
         self._campaign_id: str | None = None
 
     def start(self, workflow_name: str, campaign_id: str | None = None) -> None:
+        """Initialize the interceptor and emit the top-level workflow record."""
         from flowcept.flowceptor.adapters.base_interceptor import BaseInterceptor
         from flowcept.commons.flowcept_dataclasses.workflow_object import WorkflowObject
 
@@ -264,8 +270,7 @@ class AcademyInterceptor:
 
     def start_worker(self, workflow_id: str, campaign_id: str) -> None:
         """
-        Initialize this interceptor inside a worker process that shares an
-        existing workflow.
+        Initialize this interceptor inside a worker process sharing an existing workflow.
 
         Unlike ``start()``, this method reuses the provided *workflow_id* and
         *campaign_id* (already emitted by the parent process) so that all
@@ -286,6 +291,7 @@ class AcademyInterceptor:
         )
 
     def stop(self) -> None:
+        """Flush and close the underlying interceptor."""
         if self._interceptor is None:
             return
         with _timed("flush"):
@@ -297,6 +303,7 @@ class AcademyInterceptor:
 
     @property
     def telemetry_capture(self):
+        """Return the underlying TelemetryCapture instance, or None if not started."""
         return self._interceptor.telemetry_capture if self._interceptor else None
 
     def send_agent_workflow(self, agent_type: str, agent_id: str) -> str:
@@ -441,9 +448,10 @@ def _worker_shutdown() -> None:
 
 def _patch_process_pool_executor() -> None:
     """
-    Monkey-patch ``ProcessPoolExecutor.__init__`` so any executor created
-    while the Academy plugin is active automatically receives ``_worker_init``
-    as its initializer.
+    Monkey-patch ``ProcessPoolExecutor.__init__`` to inject ``_worker_init``.
+
+    Any executor created while the Academy plugin is active automatically
+    receives ``_worker_init`` as its initializer.
 
     Only injects when no ``initializer`` is already provided by the caller,
     so explicit user-supplied initializers are never overridden.
@@ -486,8 +494,7 @@ def _unpatch_process_pool_executor() -> None:
 
 def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecutor":
     """
-    Create a ``ProcessPoolExecutor`` with Flowcept provenance capture
-    pre-wired into every worker process.
+    Create a ``ProcessPoolExecutor`` with provenance capture pre-wired into every worker.
 
     Must be called while the Academy plugin is active — i.e., inside a
     ``with Flowcept():`` block after the plugin has started — so that the
@@ -555,8 +562,10 @@ def make_process_executor(max_workers: int | None = None) -> "ProcessPoolExecuto
 
 def _install_runtime_patches() -> None:
     """
-    Patch academy.runtime.Runtime at the class level so every Runtime instance
-    (one per agent) captures provenance without any agent code changes.
+    Patch academy.runtime.Runtime at the class level.
+
+    Every Runtime instance (one per agent) captures provenance without any
+    agent code changes.
     """
     global _PATCHER_INSTALLED
     if _PATCHER_INSTALLED:
@@ -1226,8 +1235,9 @@ def anthropic_chat(
 
 class FlowceptAnthropicClient:
     """
-    Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
-    every ``messages.create`` / ``messages.stream`` call as a FlowCept
+    Wrap an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client for provenance capture.
+
+    Records every ``messages.create`` / ``messages.stream`` call as a FlowCept
     provenance record (subtype=llm_call) via ``record_llm_call()``.
 
     Usage::
@@ -1250,6 +1260,7 @@ class FlowceptAnthropicClient:
         self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
 
     def __getattr__(self, name):
+        """Delegate attribute access to the wrapped client."""
         return getattr(self._inner, name)
 
 
@@ -1561,6 +1572,7 @@ class FlowceptAcademyPlugin:
         self._started = False
 
     def start(self) -> "FlowceptAcademyPlugin":
+        """Start provenance capture: install patches, hooks, and the interceptor."""
         if not self._enabled or self._started:
             return self
         global _ACTIVE_INTERCEPTOR, _PROV_STATS, _PERF_CSV_PATH
@@ -1597,6 +1609,7 @@ class FlowceptAcademyPlugin:
         return self
 
     def stop(self) -> None:
+        """Stop provenance capture: unregister hooks, remove patches, flush records."""
         if not self._started:
             return
         if self._llm_hook_unregister is not None:

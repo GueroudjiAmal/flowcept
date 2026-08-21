@@ -60,6 +60,7 @@ def system_name() -> str:
 
 
 def login_name() -> str:
+    """Return the current user's login name, cached after the first lookup."""
     global _LOGIN
     if _LOGIN is None:
         _LOGIN = os.environ.get("USER") or os.environ.get("USERNAME") or ""
@@ -157,6 +158,7 @@ class OnlinePublisher:
         self._mq = None
 
     def write(self, records: Iterable[dict[str, Any]]) -> int:
+        """Publish ``records`` to the MQ, building the connection on first use."""
         records = [r for r in records if r]
         if not records:
             return 0
@@ -178,6 +180,7 @@ class Emitter:
         self._on_error = on_error
 
     def emit(self, *records: dict[str, Any], supersede: frozenset[str] | None = None) -> int:
+        """Write ``records`` to every configured sink, swallowing sink errors."""
         flat = [r for r in records if r]
         if not flat:
             return 0

@@ -273,6 +273,7 @@ class FlowceptSpanExporter:
         self._recorder = Recorder(self.config)
 
     def export(self, spans) -> Any:
+        """Convert each readable span to an event and record it."""
         for span in spans:
             try:
                 event = span_to_event(self._readable_to_dict(span))
@@ -307,7 +308,9 @@ class FlowceptSpanExporter:
         }
 
     def shutdown(self) -> None:
+        """Do nothing; the recorder needs no teardown."""
         return None
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Report success; records are written as spans are exported."""
         return True

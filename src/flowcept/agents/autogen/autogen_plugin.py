@@ -318,10 +318,10 @@ async def _run_with_provenance(
     source_agent_id: str | None = None,
 ) -> Any:
     """
-    Consume team.run_stream() and emit a FlowCept provenance record for each
-    message plus one overall run record.
+    Consume team.run_stream() and emit provenance records.
 
-    Returns the final TaskResult.
+    Emits a FlowCept provenance record for each message plus one overall run
+    record.  Returns the final TaskResult.
     """
     from autogen_agentchat.base import TaskResult
     from autogen_core import CancellationToken
@@ -629,8 +629,10 @@ def record_llm_call(payload: dict) -> None:
 
 class FlowceptModelClient:
     """
-    Wraps any AutoGen ``ChatCompletionClient`` and records every LLM call as a
-    FlowCept provenance record (subtype=llm_call) via ``record_llm_call()``.
+    Wrap any AutoGen ``ChatCompletionClient`` for provenance capture.
+
+    Records every LLM call as a FlowCept provenance record (subtype=llm_call)
+    via ``record_llm_call()``.
 
     Usage::
 
@@ -659,26 +661,33 @@ class FlowceptModelClient:
 
     @property
     def model_info(self):
+        """Return the wrapped client's model info."""
         return self._inner.model_info
 
     def actual_usage(self):
+        """Return the wrapped client's actual token usage."""
         return self._inner.actual_usage()
 
     def total_usage(self):
+        """Return the wrapped client's total token usage."""
         return self._inner.total_usage()
 
     def count_tokens(self, *args, **kwargs):
+        """Count tokens via the wrapped client."""
         return self._inner.count_tokens(*args, **kwargs)
 
     def remaining_tokens(self, *args, **kwargs):
+        """Return remaining tokens via the wrapped client."""
         return self._inner.remaining_tokens(*args, **kwargs)
 
     async def close(self):
+        """Close the wrapped client."""
         return await self._inner.close()
 
     # ---- instrumented create ----
 
     async def create(self, messages, **kwargs) -> Any:
+        """Run the wrapped client's create() and record the call as provenance."""
         import time as _time
 
         t0 = _time.time()
@@ -689,6 +698,7 @@ class FlowceptModelClient:
         return result
 
     async def create_stream(self, messages, **kwargs):
+        """Stream the wrapped client's create_stream() and record the call as provenance."""
         import time as _time
 
         t0 = _time.time()
@@ -771,8 +781,9 @@ class FlowceptModelClient:
 
 class FlowceptAnthropicClient:
     """
-    Wraps an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client and records
-    every ``messages.create`` / ``messages.stream`` call as a FlowCept
+    Wrap an ``anthropic.Anthropic`` (or ``AsyncAnthropic``) client for provenance capture.
+
+    Records every ``messages.create`` / ``messages.stream`` call as a FlowCept
     provenance record (subtype=llm_call) via ``record_llm_call()``.
 
     Usage (sync)::
@@ -810,6 +821,7 @@ class FlowceptAnthropicClient:
         self.messages = _FlowceptAnthropicMessages(client.messages, agent_name, self._context)
 
     def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to the wrapped client."""
         return getattr(self._inner, name)
 
 
@@ -1231,10 +1243,7 @@ class FlowceptAutoGenPlugin:
         academy_plugin: Any,
         config: dict | None = None,
     ) -> "FlowceptAutoGenPlugin":
-        """
-        Create an AutoGen plugin that shares the buffer of a running
-        FlowceptAcademyPlugin.
-        """
+        """Create an AutoGen plugin that shares the buffer of a running FlowceptAcademyPlugin."""
         interceptor = academy_plugin._interceptor
         inst = cls(config=config, _shared_interceptor=interceptor)
         inst._started = True
@@ -1247,6 +1256,7 @@ class FlowceptAutoGenPlugin:
         return inst
 
     def start(self) -> "FlowceptAutoGenPlugin":
+        """Start provenance capture, initializing the interceptor if this plugin owns it."""
         if not self._enabled or self._started:
             return self
         if not self._owns_interceptor:
@@ -1328,6 +1338,7 @@ class FlowceptAutoGenPlugin:
         )
 
     def stop(self) -> None:
+        """Stop provenance capture and flush records if this plugin owns the interceptor."""
         if not self._started:
             return
         if not self._owns_interceptor:
@@ -1373,7 +1384,9 @@ class FlowceptAutoGenPlugin:
             print(f"[FlowceptAutoGenPlugin] Warning: could not write perf CSV — {e!r}", flush=True)
 
     def __enter__(self) -> "FlowceptAutoGenPlugin":
+        """Start the plugin when entering a context manager block."""
         return self.start()
 
     def __exit__(self, *_: Any) -> None:
+        """Stop the plugin when exiting a context manager block."""
         self.stop()

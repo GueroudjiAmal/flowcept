@@ -62,6 +62,7 @@ class FlowceptTraceProcessor:
     # -- traces --------------------------------------------------------------
 
     def on_trace_start(self, trace: Any) -> None:
+        """Open a session tracer for a new SDK trace."""
         trace_id = getattr(trace, "trace_id", None)
         if not trace_id:
             return
@@ -75,6 +76,7 @@ class FlowceptTraceProcessor:
         tracer.prompt(None, prompt_id=trace_id)
 
     def on_trace_end(self, trace: Any) -> None:
+        """Close the trace's session tracer and drop its span bookkeeping."""
         trace_id = getattr(trace, "trace_id", None)
         tracer = self._tracers.pop(trace_id, None)
         if tracer is None:
@@ -94,6 +96,7 @@ class FlowceptTraceProcessor:
     # -- spans ---------------------------------------------------------------
 
     def on_span_start(self, span: Any) -> None:
+        """Record the start of an SDK span in the owning session tracer."""
         tracer, data, span_type = self._resolve(span)
         if tracer is None:
             return
@@ -121,6 +124,7 @@ class FlowceptTraceProcessor:
             )
 
     def on_span_end(self, span: Any) -> None:
+        """Record the completion of an SDK span in the owning session tracer."""
         tracer, data, span_type = self._resolve(span)
         if tracer is None:
             return
@@ -175,7 +179,7 @@ class FlowceptTraceProcessor:
         return tracer, data, getattr(data, "type", None)
 
     def _owning_agent(self, span: Any) -> str | None:
-        """The nearest enclosing subagent, so its tools land in its workflow."""
+        """Return the nearest enclosing subagent, so its tools land in its workflow."""
         parent = getattr(span, "parent_id", None)
         seen = 0
         while parent and seen < 32:  # depth guard: the chain comes from outside
@@ -186,11 +190,13 @@ class FlowceptTraceProcessor:
         return None
 
     def shutdown(self) -> None:
+        """Close any session tracers still open when the SDK shuts down."""
         for trace_id in list(self._tracers):
             tracer = self._tracers.pop(trace_id)
             tracer.end(source="shutdown")
 
     def force_flush(self) -> None:
+        """Do nothing; records are emitted as spans end."""
         return None
 
 
@@ -221,7 +227,7 @@ def _span_name(data: Any, span_type: str | None) -> str:
 
 
 def _guardrail_error(data: Any) -> str | None:
-    """A tripped guardrail is a failed tool, not a successful one."""
+    """Return an error message for a tripped guardrail, which is a failed tool."""
     if getattr(data, "type", None) == "guardrail" and getattr(data, "triggered", False):
         return "guardrail triggered"
     return None

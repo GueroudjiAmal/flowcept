@@ -364,6 +364,7 @@ Runnable examples for each framework are in [`examples/agents/`](examples/agents
 - [`examples/agents/cli_harness/cli_harness_example.py`](examples/agents/cli_harness/cli_harness_example.py) — profile-driven CLI-harness adapter, replaying Codex-style hook events (runs offline)
 - [`examples/agents/claude_code/claude_code_example.py`](examples/agents/claude_code/claude_code_example.py) — Claude Code install walkthrough plus a simulated hook-event replay (runs offline)
 - [`examples/agents/claude_agent_sdk/claude_agent_sdk_example.py`](examples/agents/claude_agent_sdk/claude_agent_sdk_example.py) — `trace_query` drop-in for `claude_agent_sdk.query` (requires `ANTHROPIC_API_KEY`)
+- [`examples/agents/prov_analysis/prov_analysis_example.py`](examples/agents/prov_analysis/prov_analysis_example.py) — agentic provenance analysis: replays two synthetic sessions and runs every `prov_analysis` function over them (runs offline)
 
 ## AI Coding Harness Provenance Plugins
 
@@ -442,6 +443,30 @@ environment variables, including redaction of credential-shaped values, prompt
 digests instead of full prompts, and offline-first buffering. Full documentation,
 including the configuration table, privacy posture, and the record model, is in
 [`src/flowcept/agents/harness/README.md`](src/flowcept/agents/harness/README.md).
+
+### Provenance analysis
+
+Captured sessions can be analyzed, not just replayed. The analysis logic lives
+in [`flowcept.agents.prov_analysis`](src/flowcept/agents/prov_analysis/) —
+pure functions over provenance records — and is exposed on every surface:
+
+- **Harness MCP tools** — the `flowcept-harness-mcp` server adds
+  `analyze_session` (summary + agent behavior), `analyze_errors` (failure
+  clustering with excerpts), `find_slowest` (latency ranking), and
+  `cross_links` (edges across framework boundaries).
+- **CLI** — `flowcept-harness analyze <session> [--errors | --slowest N | --links]`
+  runs the same analyses over a session's buffer.
+- **Claude Code plugin** — [`plugins/flowcept`](plugins/flowcept) wires the MCP
+  server in via its `.mcp.json` (a stdio server launched by
+  `scripts/mcp-server.sh`) and ships two skills: `prov-analysis` (turn captured
+  provenance into answers) and `write-flowcept-plugin` (author a capture plugin
+  for a new harness). Set `FLOWCEPT_HARNESS_AUTOREPORT=1` to have the plugin
+  write a workflow card per session on SessionEnd (opt-in, off by default).
+- **Flowcept agent MCP / web chat** — `df_*`/`db_*` analysis tools and
+  `compare_executions` over the agent's in-memory context or the DB.
+
+See [`examples/agents/prov_analysis/prov_analysis_example.py`](examples/agents/prov_analysis/prov_analysis_example.py)
+and [`src/flowcept/agents/prov_analysis/README.md`](src/flowcept/agents/prov_analysis/README.md).
 
 ## Storage And Querying
 

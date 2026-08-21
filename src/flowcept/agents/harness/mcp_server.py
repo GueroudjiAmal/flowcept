@@ -253,6 +253,79 @@ def build_server(config: Config | None = None):
             "slowest_calls": slowest[:10],
         }
 
+    # -- provenance analysis tools (thin wrappers over prov_analysis.core) ----
+
+    def _session_records(session: str | None):
+        path = _find_buffer(config, session)
+        if path is None:
+            return None, {"error": f"No session matching {session!r}."}
+        return _records(path), None
+
+    @server.tool(
+        description=(
+            "Analyze one captured session end to end: execution summary (counts by "
+            "activity/subtype, statuses, duration bounds, token usage) plus per-agent "
+            "behavior (turns, tool calls by tool, LLM calls, subagents). `session` "
+            "accepts a workflow id or prefix; omit it for the most recent session."
+        )
+    )
+    def analyze_session(session: str | None = None) -> dict[str, Any]:
+        from flowcept.agents.prov_analysis import core as prov_core
+
+        records, error = _session_records(session)
+        if error:
+            return error
+        return {
+            "summary": prov_core.summarize_execution(records),
+            "agent_behavior": prov_core.analyze_agent_behavior(records),
+        }
+
+    @server.tool(
+        description=(
+            "Analyze failures in one captured session: failed tasks grouped by "
+            "activity with error excerpts, error rate per activity, and first/last "
+            "failure times. Omit `session` for the most recent session."
+        )
+    )
+    def analyze_errors(session: str | None = None) -> dict[str, Any]:
+        from flowcept.agents.prov_analysis import core as prov_core
+
+        records, error = _session_records(session)
+        if error:
+            return error
+        return prov_core.analyze_errors(records)
+
+    @server.tool(
+        description=(
+            "Find the slowest tasks of one captured session, longest elapsed first, "
+            "with activity, status, and parent-chain depth. Omit `session` for the "
+            "most recent session."
+        )
+    )
+    def find_slowest(session: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        from flowcept.agents.prov_analysis import core as prov_core
+
+        records, error = _session_records(session)
+        if error:
+            return [error]
+        return prov_core.find_slowest_tasks(records, limit=limit)
+
+    @server.tool(
+        description=(
+            "List cross-framework provenance links in one captured session: edges "
+            "built from source_agent_id pointers between frameworks (e.g. a LangGraph "
+            "run linked to a task from another agent framework), plus the count of "
+            "unlinked tasks. Omit `session` for the most recent session."
+        )
+    )
+    def cross_links(session: str | None = None) -> dict[str, Any]:
+        from flowcept.agents.prov_analysis import core as prov_core
+
+        records, error = _session_records(session)
+        if error:
+            return error
+        return prov_core.cross_framework_links(records)
+
     @server.tool(
         description=(
             "Record a provenance event from a harness that has no hook system. `kind` is "

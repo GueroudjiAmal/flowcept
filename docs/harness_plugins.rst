@@ -197,6 +197,7 @@ The ``flowcept-harness`` CLI
    flowcept-harness show         show one session's activity, turn by turn
    flowcept-harness status       configuration and capture health
    flowcept-harness report       generate a Flowcept report from a buffer
+   flowcept-harness analyze      analyze one session (failures, latency, links)
    flowcept-harness flush        publish buffered records to a Flowcept backend
    flowcept-harness repair       close sessions a crashed harness left open
    flowcept-harness install      print the settings that enable capture
@@ -212,6 +213,56 @@ Useful options:
 - ``report --input <buffer ...> --type workflow_card --format markdown
   -o/--output <file>``
 - ``--home <dir>`` (global) — override the capture home directory
+
+Provenance analysis
+-------------------
+
+Captured sessions can be analyzed, not just replayed. The analysis logic is
+``flowcept.agents.prov_analysis`` — pure functions over provenance records
+(``src/flowcept/agents/prov_analysis/README.md``) — exposed on three
+harness-side surfaces:
+
+**MCP analysis tools.** The ``flowcept-harness-mcp`` server exposes four
+analysis tools alongside its capture and inspection tools; each takes an
+optional ``session`` id prefix and defaults to the most recent session:
+
+- ``analyze_session`` — execution summary (counts, statuses, durations, token
+  usage) plus per-agent behavior (turns, tool calls, subagent fan-out).
+- ``analyze_errors`` — failure clustering: which activities fail, how often,
+  with stderr/message excerpts.
+- ``find_slowest`` — the slowest tasks, longest elapsed first, with activity,
+  status, and parent-chain depth (``limit`` defaults to 10).
+- ``cross_links`` — cross-framework provenance edges built from
+  ``source_agent_id`` pointers (e.g. a LangGraph run launched from a coding
+  session), plus the count of unlinked tasks.
+
+**CLI.** The same analyses from the terminal:
+
+.. code-block:: bash
+
+   flowcept-harness analyze <session>              # summary + agent behavior
+   flowcept-harness analyze <session> --errors     # failure clustering
+   flowcept-harness analyze <session> --slowest 5  # latency ranking
+   flowcept-harness analyze <session> --links      # cross-framework links
+
+``<session>`` is a workflow id or prefix and defaults to the most recent
+session.
+
+**Claude Code plugin.** ``plugins/flowcept`` wires the MCP server in through
+its ``.mcp.json``, which declares a ``flowcept-provenance`` stdio server
+launched by ``scripts/mcp-server.sh`` — installing the plugin gives Claude
+Code the analysis tools with no extra setup. The plugin also ships two
+analysis-oriented skills: ``prov-analysis`` (turn captured provenance into
+answers: failures, latency, cost, run comparison, cross-framework linkage)
+and ``write-flowcept-plugin`` (author a capture plugin for a new harness).
+Setting ``FLOWCEPT_HARNESS_AUTOREPORT=1`` additionally enables an opt-in
+SessionEnd hook that writes a workflow card per session to
+``$FLOWCEPT_HARNESS_HOME/reports/``; it is off by default and exits silently
+when unset.
+
+The Flowcept agent MCP server and web chat expose the same analyses over
+in-memory and DB records — see :doc:`agent`. A runnable, fully offline
+example is ``examples/agents/prov_analysis/prov_analysis_example.py``.
 
 Configuration
 -------------

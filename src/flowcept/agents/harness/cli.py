@@ -269,6 +269,80 @@ def cmd_report(args, config: Config) -> int:
     return OK
 
 
+def _find_session_buffer(config: Config, session: str | None) -> Path | None:
+    buffers = _buffers(config)
+    if not buffers:
+        return None
+    if not session:
+        return buffers[0]
+    for path in buffers:
+        if path.stem == session or path.stem.startswith(session):
+            return path
+    return None
+
+
+def cmd_analyze(args, config: Config) -> int:
+    """Analyze one captured session with the provenance analysis functions."""
+    from flowcept.agents.prov_analysis import core as prov_core
+
+    path = _find_session_buffer(config, args.session)
+    if path is None:
+        print(f"No session matching {args.session!r}.", file=sys.stderr)
+        return FAILED
+
+    records = list(_read_records(path))
+    print(f"session: {path.stem}")
+
+    if args.errors:
+        errors = prov_core.analyze_errors(records)
+        print(f"failed tasks: {errors['n_failed']} of {errors['n_tasks']}")
+        if errors["first_failure_at_utc"]:
+            print(f"first failure: {errors['first_failure_at_utc']}  last: {errors['last_failure_at_utc']}")
+        for activity, entry in errors["by_activity"].items():
+            rate = f"{entry['error_rate']:.0%}" if entry["error_rate"] is not None else "?"
+            print(f"  {activity:24} {entry['n_failed']}/{entry['n_total']} failed ({rate})")
+            for excerpt in entry["excerpts"]:
+                print(f"    ! {excerpt}")
+        return OK
+
+    if args.slowest is not None:
+        for row in prov_core.find_slowest_tasks(records, limit=args.slowest):
+            print(
+                f"  {row['elapsed_seconds']:>10.3f}s  {str(row.get('activity_id') or '?'):24} "
+                f"{str(row.get('status') or ''):9} depth={row['parent_depth']}"
+            )
+        return OK
+
+    if args.links:
+        links = prov_core.cross_framework_links(records)
+        print(f"cross-framework links: {links['n_links']}  unlinked tasks: {links['n_unlinked_tasks']}")
+        if links["frameworks_seen"]:
+            print(f"frameworks seen: {', '.join(links['frameworks_seen'])}")
+        for link in links["links"]:
+            frameworks = "<->".join(link["frameworks"]) or "?"
+            print(f"  {link['source_task_id']} -> {link['target_task_id']}  [{frameworks}]")
+        return OK
+
+    summary = prov_core.summarize_execution(records)
+    behavior = prov_core.analyze_agent_behavior(records)
+    print(f"records: {summary['n_records']}  workflows: {summary['n_workflows']}  tasks: {summary['n_tasks']}")
+    if summary["total_elapsed_seconds"] is not None:
+        print(f"elapsed: {summary['total_elapsed_seconds']:.2f}s ({summary['started_at_utc']} UTC)")
+    print(f"statuses: {' '.join(f'{k}={v}' for k, v in summary['status_counts'].items()) or '-'}")
+    print(f"by subtype: {' '.join(f'{k}={v}' for k, v in summary['tasks_by_subtype'].items()) or '-'}")
+    usage = summary["token_usage"]["totals"]
+    if usage:
+        print(f"token usage: {' '.join(f'{k}={v}' for k, v in usage.items())}")
+    for session in behavior["sessions"]:
+        print(
+            f"session workflow: {session['workflow_id'][:8]}  {session['status']}  subagents={session['n_subagents']}"
+        )
+    for agent, entry in behavior["agents"].items():
+        tools = " ".join(f"{k}={v}" for k, v in entry["tool_calls_by_tool"].items()) or "-"
+        print(f"  agent {agent[:8]}: turns={entry['turns']} llm_calls={entry['llm_calls']} tools: {tools}")
+    return OK
+
+
 def cmd_repair(args, config: Config) -> int:
     """Close sessions whose harness exited without a session-end event."""
     from .recorder import repair_session
@@ -361,6 +435,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", default="markdown")
     p.add_argument("-o", "--output", help="Write to a file instead of stdout.")
     p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("analyze", help="Analyze one captured session's provenance.")
+    p.add_argument("session", nargs="?", help="Workflow id or prefix (default: most recent).")
+    p.add_argument("--errors", action="store_true", help="Analyze failures only.")
+    p.add_argument("--slowest", type=int, metavar="N", help="Show the N slowest tasks.")
+    p.add_argument("--links", action="store_true", help="Show cross-framework links.")
+    p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("repair", help="Close sessions left open by a crashed harness.")
     p.set_defaults(func=cmd_repair)

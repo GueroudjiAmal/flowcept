@@ -30,6 +30,11 @@ For code-assistant behavior, use the repository root `AGENTS.md`.
 - `data_query_tools/`: shared query logic. This is where task, workflow, object, and
   DataFrame query behavior lives. These modules can call `DBAPI` for persisted data
   or read the in-memory DataFrame / workflow object for runtime questions.
+- `prov_analysis/`: agentic provenance analysis over PROV-AGENT records — pure
+  analysis functions (summaries, errors, agent behavior, slowest tasks,
+  cross-framework links, run comparison) shared by the harness MCP server, the
+  Flowcept agent MCP server, the web chat, and `flowcept-harness analyze`.
+  Full docs: [`prov_analysis/README.md`](prov_analysis/README.md).
 - `prompts/`: prompt-builder functions and prompt registrations. Keep them as plain
   Python builders that return strings, not Jinja templates.
 - `provenance_schema_manager/`: schema introspection and documentation context used by
@@ -112,6 +117,10 @@ agents/
     db_query_tools.py        # DBQueryTools + query_tasks, query_workflows, get_task_summary, …
     df_query_tools.py        # DFQueryTools + run_df_query, execute_df_code, generate_result_df, …
     pandas_utils.py          # safe_execute, normalize_output, format_result_df, …
+
+  prov_analysis/             # Pure provenance-analysis functions shared by all surfaces
+    core.py                  # summarize_execution, analyze_errors, find_slowest_tasks, …
+    tools.py                 # ToolResult wrappers over core (no MCP/LangChain imports)
 
   mcp/
     mcp_server.py            # MCP server entry point (start with `flowcept --start --agent`)

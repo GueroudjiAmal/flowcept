@@ -4,14 +4,14 @@
     "name": "flowcept-harness"
   },
   "metadata": {
-    "description": "PROV-AGENT provenance capture for AI coding harnesses, backed by Flowcept.",
-    "version": "0.1.0"
+    "description": "PROV-AGENT provenance capture and analysis for AI coding harnesses, backed by Flowcept.",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "flowcept",
       "source": "./plugins/flowcept",
-      "description": "Capture Claude Code sessions as Flowcept PROV-AGENT provenance: prompts, turns, tool calls, and subagents.",
+      "description": "Capture Claude Code sessions as Flowcept PROV-AGENT provenance and analyze them with MCP provenance tools, analysis skills, and optional auto-reports.",
       "category": "observability"
     }
   ]

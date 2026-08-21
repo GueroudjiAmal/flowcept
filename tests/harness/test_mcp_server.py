@@ -57,6 +57,10 @@ def test_expected_tools_are_registered(server):
         "session_stats",
         "record_event",
         "generate_report",
+        "analyze_session",
+        "analyze_errors",
+        "find_slowest",
+        "cross_links",
     }
 
 

@@ -1,7 +1,7 @@
 {
   "name": "flowcept",
-  "description": "Capture Claude Code sessions as Flowcept PROV-AGENT provenance: prompts, turns, tool calls, and subagents, written to a JSONL buffer that Flowcept reads natively.",
-  "version": "0.1.0",
+  "description": "Capture Claude Code sessions as Flowcept PROV-AGENT provenance and analyze them in place: prompts, turns, tool calls, and subagents written to a JSONL buffer Flowcept reads natively, plus MCP provenance tools (flowcept-provenance server), analysis skills, and an optional auto-report on session end.",
+  "version": "0.2.0",
   "author": {
     "name": "flowcept-harness"
   },

@@ -281,9 +281,61 @@ def _find_session_buffer(config: Config, session: str | None) -> Path | None:
     return None
 
 
+def _analyze_compare(args, config: Config, prov_core) -> int:
+    """Print a per-activity comparison of two captured sessions."""
+    session_a, session_b = args.compare
+    paths = []
+    for session in (session_a, session_b):
+        path = _find_session_buffer(config, session)
+        if path is None:
+            print(f"No session matching {session!r}.", file=sys.stderr)
+            return FAILED
+        paths.append(path)
+    path_a, path_b = paths
+
+    comparison = prov_core.compare_executions(list(_read_records(path_a)), list(_read_records(path_b)))
+    totals = comparison["totals"]
+
+    def _secs(value: Any) -> str:
+        return f"{value:.2f}s" if isinstance(value, (int, float)) else "?"
+
+    def _rate(value: Any) -> str:
+        return f"{value:.0%}" if isinstance(value, (int, float)) else "?"
+
+    print(f"comparing: A={path_a.stem}  B={path_b.stem}")
+    tasks_delta = totals["n_tasks_b"] - totals["n_tasks_a"]
+    print(f"tasks: {totals['n_tasks_a']} -> {totals['n_tasks_b']} ({tasks_delta:+d})")
+    if totals["total_elapsed_delta"] is not None:
+        print(
+            f"elapsed: {_secs(totals['total_elapsed_a'])} -> {_secs(totals['total_elapsed_b'])} "
+            f"({totals['total_elapsed_delta']:+.2f}s)"
+        )
+    for activity, row in comparison["activities"].items():
+        line = f"  {activity:24} count {row['count_a']} -> {row['count_b']} ({row['count_delta']:+d})"
+        if row["elapsed_avg_delta"] is not None:
+            avg_a, avg_b = _secs(row["elapsed_avg_a"]), _secs(row["elapsed_avg_b"])
+            line += f"  avg {avg_a} -> {avg_b} ({row['elapsed_avg_delta']:+.2f}s)"
+        if row["error_rate_a"] is not None or row["error_rate_b"] is not None:
+            line += f"  errors {_rate(row['error_rate_a'])} -> {_rate(row['error_rate_b'])}"
+        print(line)
+    if comparison["only_in_a"]:
+        print(f"only in A: {', '.join(comparison['only_in_a'])}")
+    if comparison["only_in_b"]:
+        print(f"only in B: {', '.join(comparison['only_in_b'])}")
+    return OK
+
+
 def cmd_analyze(args, config: Config) -> int:
     """Analyze one captured session with the provenance analysis functions."""
     from flowcept.agents.prov_analysis import core as prov_core
+
+    if args.compare:
+        # --compare drives its own two-session resolution; the single-session
+        # analyses make no sense alongside it.
+        if args.errors or args.links or args.slowest is not None:
+            print("--compare cannot be combined with --errors, --slowest, or --links.", file=sys.stderr)
+            return FAILED
+        return _analyze_compare(args, config, prov_core)
 
     path = _find_session_buffer(config, args.session)
     if path is None:
@@ -437,7 +489,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("analyze", help="Analyze one captured session's provenance.")
-    p.add_argument("session", nargs="?", help="Workflow id or prefix (default: most recent).")
+    # A single session and a two-session comparison are different modes, so
+    # argparse rejects `analyze <session> --compare A B` outright.
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("session", nargs="?", help="Workflow id or prefix (default: most recent).")
+    mode.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("SESSION_A", "SESSION_B"),
+        help="Compare two sessions per activity (counts, durations, error rates).",
+    )
     p.add_argument("--errors", action="store_true", help="Analyze failures only.")
     p.add_argument("--slowest", type=int, metavar="N", help="Show the N slowest tasks.")
     p.add_argument("--links", action="store_true", help="Show cross-framework links.")

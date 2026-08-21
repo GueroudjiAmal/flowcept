@@ -347,6 +347,15 @@ result = await ag.run_team(team, task, source_agent_id=action_task_id)
 
 The AutoGen plugin stores it in `custom_metadata` of the `autogen_run` record.
 
+**AI coding harness (target side)** — the harness capture (`flowcept.agents.harness`) links the other way too: give it a framework-emitted task or agent id and every turn, tool, and LLM-call task it records carries it as a top-level `source_agent_id`. Set it with the `flowcept_source_agent_id` hook-payload key, the `FLOWCEPT_HARNESS_SOURCE_AGENT_ID` environment variable (the payload key wins), or `SessionTracer(..., source_agent_id=...)`:
+
+```python
+from flowcept.agents.harness import SessionTracer
+
+with SessionTracer("my_agent", source_agent_id=action_task_id) as tracer:
+    ...
+```
+
 In all cases, `campaign_id` and `workflow_id` alone are sufficient for coarse-grained cross-framework queries without explicit identifier threading.
 
 ### Examples

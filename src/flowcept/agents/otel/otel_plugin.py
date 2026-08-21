@@ -18,6 +18,12 @@ attributes this cares about: ``gen_ai.operation.name`` distinguishes a model
 call from a tool call, ``gen_ai.tool.name`` names the tool, and
 ``gen_ai.conversation.id`` groups spans into a session. Non-GenAI spans are
 ignored -- an HTTP client span is not provenance.
+
+``gen_ai.system`` is optional and never affects grouping: session identity
+derives from the conversation id alone, so spans with and without the
+attribute land in one workflow. The first non-empty value a conversation
+shows is recorded once as a lifecycle event; later or conflicting values are
+ignored (first-wins).
 """
 
 from __future__ import annotations
@@ -46,6 +52,12 @@ MODEL_OPERATIONS = frozenset({"chat", "generate_content", "text_completion", "em
 
 #: ...and the ones that mean "a tool ran".
 TOOL_OPERATIONS = frozenset({"execute_tool", "invoke_tool", "tool"})
+
+#: The first non-empty ``gen_ai.system`` seen per conversation. The provider
+#: name must never feed workflow identity (mixed presence would split one
+#: conversation across workflows), so it is tracked here and recorded once as
+#: a lifecycle event instead. First non-empty value wins.
+_session_systems: dict[str, str] = {}
 
 
 def _attr(attributes: dict[str, Any], *keys: str) -> Any:
@@ -120,7 +132,10 @@ def span_to_event(span: dict[str, Any], *, harness: str = "otel") -> HarnessEven
 
     return HarnessEvent(
         kind=kind,
-        harness=_attr(attributes, "gen_ai.system", "service.name") or harness,
+        # Deliberately NOT `gen_ai.system`: the harness partitions workflow
+        # identity, and the provider attribute may be set on only some of a
+        # conversation's spans. See `_provider_notice`.
+        harness=harness,
         session_id=str(session_id),
         # The event carries the span's *end*; `started_at` preserves the
         # duration the span already measured.
@@ -138,6 +153,29 @@ def span_to_event(span: dict[str, Any], *, harness: str = "otel") -> HarnessEven
         usage=usage or None,
         agent_name=_attr(attributes, "gen_ai.agent.name", "agent.name"),
         agent_ref=_attr(attributes, "gen_ai.agent.id", "agent.id"),
+    )
+
+
+def _provider_notice(event: HarnessEvent, attributes: dict[str, Any]) -> HarnessEvent | None:
+    """Build a one-time lifecycle event recording the session's ``gen_ai.system``.
+
+    The provider name must not partition the session (that would split spans
+    with and without the attribute across workflows), so it lands as a
+    ``harness_event`` task in the conversation's workflow instead. The first
+    non-empty value wins; later or conflicting values return ``None``.
+    """
+    system = _attr(attributes, "gen_ai.system", "service.name")
+    if not system or event.session_id in _session_systems:
+        return None
+    _session_systems[event.session_id] = str(system)
+    return HarnessEvent(
+        kind=EventKind.NOTIFICATION,
+        harness=event.harness,
+        session_id=event.session_id,
+        timestamp=event.timestamp,
+        source="gen_ai.system",
+        message=str(system),
+        raw={"gen_ai.system": str(system)},
     )
 
 
@@ -187,6 +225,9 @@ def ingest_spans(spans: Iterable[dict[str, Any]], config: Config | None = None) 
             continue
         if recorder.record(event):
             recorded += 1
+        notice = _provider_notice(event, span.get("attributes") or {})
+        if notice is not None:
+            recorder.record(notice)
     return recorded
 
 
@@ -276,11 +317,15 @@ class FlowceptSpanExporter:
         """Convert each readable span to an event and record it."""
         for span in spans:
             try:
-                event = span_to_event(self._readable_to_dict(span))
+                data = self._readable_to_dict(span)
+                event = span_to_event(data)
             except Exception:
                 continue
             if event is not None:
                 self._recorder.record(event)
+                notice = _provider_notice(event, data.get("attributes") or {})
+                if notice is not None:
+                    self._recorder.record(notice)
         try:
             from opentelemetry.sdk.trace.export import SpanExportResult
 

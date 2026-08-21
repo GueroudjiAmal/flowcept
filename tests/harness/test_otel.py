@@ -7,13 +7,13 @@ import json
 import pytest
 
 from flowcept.agents.otel import otel_plugin as otel
-from flowcept.agents.harness.vocab import AGENT_TOOL, AI_MODEL_INVOCATION
+from flowcept.agents.harness.vocab import AGENT_TOOL, AI_MODEL_INVOCATION, HARNESS_EVENT
 
 CONVERSATION = "gen_ai.conversation.id"
 
 
 def span(**attributes):
-    """A minimal console-exporter-shaped span."""
+    """Build a minimal console-exporter-shaped span."""
     return {
         "name": attributes.pop("_name", "span"),
         "attributes": {CONVERSATION: "conv-1", **attributes},
@@ -25,6 +25,7 @@ def span(**attributes):
 
 
 def test_tool_span_becomes_a_tool_task(config, buffer_records):
+    """A tool-execution span maps to an agent_tool task with parsed arguments."""
     assert otel.ingest_spans(
         [
             span(
@@ -48,6 +49,7 @@ def test_tool_span_becomes_a_tool_task(config, buffer_records):
 
 
 def test_model_span_becomes_a_model_invocation(config, buffer_records):
+    """A chat span maps to an ai_model_invocation task with model and usage."""
     otel.ingest_spans(
         [
             span(
@@ -68,6 +70,7 @@ def test_model_span_becomes_a_model_invocation(config, buffer_records):
 
 
 def test_error_status_marks_the_tool_failed(config, buffer_records):
+    """An ERROR span status becomes an errored task with its description as stderr."""
     bad = span(**{"gen_ai.tool.name": "deploy"})
     bad["status"] = {"status_code": "ERROR", "description": "permission denied"}
     otel.ingest_spans([bad], config)
@@ -84,11 +87,13 @@ def test_non_genai_spans_are_ignored(config, buffer_records):
 
 
 def test_spans_without_a_conversation_id_are_ignored(config):
+    """A span with no conversation id cannot be grouped and is skipped."""
     orphan = {"name": "tool", "attributes": {"gen_ai.tool.name": "x"}}
     assert otel.ingest_spans([orphan], config) == 0
 
 
 def test_spans_group_into_one_session(config, buffer_records):
+    """Spans sharing a conversation id land in one workflow."""
     otel.ingest_spans(
         [
             span(**{"gen_ai.operation.name": "chat", "gen_ai.request.model": "m"}),
@@ -102,12 +107,85 @@ def test_spans_group_into_one_session(config, buffer_records):
     assert len({r["workflow_id"] for r in buffer_records() if r.get("type") == "task"}) == 1
 
 
+def test_mixed_gen_ai_system_does_not_split_the_session(config, buffer_records):
+    """Spans of one conversation land in ONE workflow even when only some set `gen_ai.system`."""
+    otel.ingest_spans(
+        [
+            span(**{CONVERSATION: "conv-mixed", "gen_ai.operation.name": "chat", "gen_ai.request.model": "m"}),
+            span(
+                **{
+                    CONVERSATION: "conv-mixed",
+                    "gen_ai.system": "openai",
+                    "gen_ai.tool.name": "grep",
+                    "gen_ai.tool.call.id": "c1",
+                }
+            ),
+        ],
+        config,
+    )
+
+    records = buffer_records()
+    assert len([r for r in records if r.get("type") == "workflow"]) == 1
+    assert len({r["workflow_id"] for r in records if r.get("type") == "task"}) == 1
+    # The provider name is still recorded, as a one-time lifecycle event.
+    notice = next(r for r in records if r.get("subtype") == HARNESS_EVENT)
+    assert notice["used"] == {"trigger": "gen_ai.system", "message": "openai"}
+
+
+def test_different_conversations_stay_separate_sessions(config, buffer_records):
+    """Two conversation ids still yield two workflows."""
+    otel.ingest_spans(
+        [
+            span(**{CONVERSATION: "conv-a", "gen_ai.tool.name": "alpha"}),
+            span(**{CONVERSATION: "conv-b", "gen_ai.tool.name": "beta"}),
+        ],
+        config,
+    )
+    workflows = {r["workflow_id"] for r in buffer_records() if r.get("type") == "workflow"}
+    assert len(workflows) == 2
+
+
+def test_conflicting_gen_ai_system_first_value_wins(config, buffer_records):
+    """Document the chosen policy: first-wins.
+
+    The first non-empty `gen_ai.system` a conversation shows is the one
+    recorded; later, different values neither re-record nor split the session.
+    """
+    otel.ingest_spans(
+        [
+            span(
+                **{
+                    CONVERSATION: "conv-conflict",
+                    "gen_ai.system": "openai",
+                    "gen_ai.tool.name": "t1",
+                    "gen_ai.tool.call.id": "c1",
+                }
+            ),
+            span(
+                **{
+                    CONVERSATION: "conv-conflict",
+                    "gen_ai.system": "anthropic",
+                    "gen_ai.tool.name": "t2",
+                    "gen_ai.tool.call.id": "c2",
+                }
+            ),
+        ],
+        config,
+    )
+
+    records = buffer_records()
+    assert len([r for r in records if r.get("type") == "workflow"]) == 1
+    notices = [r for r in records if r.get("subtype") == HARNESS_EVENT]
+    assert len(notices) == 1
+    assert notices[0]["used"]["message"] == "openai"
+
+
 def test_ingest_jsonl_file(config, tmp_path, buffer_records):
+    """Spans written as JSON lines are ingested from disk."""
     path = tmp_path / "spans.jsonl"
     path.write_text(
         "\n".join(
-            json.dumps(span(**{"gen_ai.tool.name": name, "gen_ai.tool.call.id": name}))
-            for name in ("alpha", "beta")
+            json.dumps(span(**{"gen_ai.tool.name": name, "gen_ai.tool.call.id": name})) for name in ("alpha", "beta")
         ),
         encoding="utf-8",
     )
@@ -116,6 +194,7 @@ def test_ingest_jsonl_file(config, tmp_path, buffer_records):
 
 
 def test_ingest_json_array_file(config, tmp_path):
+    """Spans written as one JSON array are ingested from disk."""
     path = tmp_path / "spans.json"
     path.write_text(json.dumps([span(**{"gen_ai.tool.name": "alpha"})]), encoding="utf-8")
     assert otel.ingest_file(path, config) == 1

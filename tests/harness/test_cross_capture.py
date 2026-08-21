@@ -1,6 +1,6 @@
 """Tests for how the AI-harness capture and the agentic-framework plugins interoperate.
 
-Two real join mechanisms exist between the two capture systems:
+Three real join mechanisms exist between the two capture systems:
 
 * a shared ``campaign_id``: the harness recorder stamps it on every buffer
   record (from ``Config.campaign_id`` / ``FLOWCEPT_HARNESS_CAMPAIGN_ID``), and
@@ -8,12 +8,13 @@ Two real join mechanisms exist between the two capture systems:
   two record sets join on it downstream;
 * framework -> harness linking: a harness-emitted ``task_id`` can be passed as
   ``_source_agent_id`` in a LangGraph initial state, and the LangGraph plugin
-  stores it as ``custom_metadata.source_agent_id`` on its records.
-
-The reverse direction (a harness record pointing at a framework task) is *not*
-implemented: ``prov.task_record`` accepts ``source_agent_id`` but no harness
-code path (recorder, tracer, cli_harness, claude_agent_sdk) ever passes it, so
-these tests exercise the field only at the record-builder/emitter level.
+  stores it as ``custom_metadata.source_agent_id`` on its records;
+* harness -> framework linking: a framework-emitted task/agent id reaches the
+  harness recorder either as the ``flowcept_source_agent_id`` hook-payload key
+  or via the ``FLOWCEPT_HARNESS_SOURCE_AGENT_ID`` environment variable (the
+  payload key wins), and lands as ``source_agent_id`` on every turn, tool, and
+  LLM-call task the harness emits. ``SessionTracer`` takes the same value as
+  its ``source_agent_id`` argument.
 
 Framework emission is captured in memory by replacing ``BaseInterceptor`` with
 a fake (the pattern used by tests/agents/plugins), so no MQ, MongoDB, or
@@ -32,6 +33,8 @@ from flowcept.agents.harness.config import load_config
 from flowcept.agents.harness.emit import Emitter
 from flowcept.agents.harness.vocab import AGENT_TOOL, AI_MODEL_INVOCATION
 from flowcept.agents.langgraph.langgraph_plugin import FlowceptLangGraphPlugin
+
+from .test_claude_code import fire
 
 pytest.importorskip("langgraph")
 pytest.importorskip("langchain_core")
@@ -128,9 +131,8 @@ def _tasks(records, subtype=None):
 def test_task_record_carries_source_agent_id_into_the_buffer(config, buffer_records):
     """A harness task record built with a source agent id keeps it end-to-end.
 
-    ``prov.task_record`` is the only harness code that accepts
-    ``source_agent_id`` (no recorder/tracer path fills it in), so the emitting
-    path is exercised directly through the Emitter.
+    This exercises the record-builder/emitter level directly; the recorder,
+    hook adapters, and tracer paths are covered by the tests below.
     """
     workflow_id = ids.workflow_id_for("sdk_agent", "link-run")
     record = prov.task_record(
@@ -147,12 +149,11 @@ def test_task_record_carries_source_agent_id_into_the_buffer(config, buffer_reco
     assert buffered["task_id"] == record["task_id"]
 
 
-def test_recorder_emitted_tasks_have_no_source_agent_id(config, buffer_records):
-    """Nothing in the recorder path fills source_agent_id; it must stay absent.
+def test_recorder_emitted_tasks_have_no_source_agent_id_when_unset(config, buffer_records):
+    """With no payload key, env var, or tracer argument, the field stays absent.
 
-    None-valued keys are dropped by ``prov._clean``, so an ordinary harness run
-    never emits the field at all -- the join is left to campaign_id or to the
-    framework side pointing back at a harness task.
+    None-valued keys are dropped by ``prov._clean``, so a harness run that was
+    not given a source agent id never emits the field at all.
     """
     with SessionTracer("sdk_agent", "plain-run", config=config) as tracer:
         tracer.prompt("hello")
@@ -164,6 +165,73 @@ def test_recorder_emitted_tasks_have_no_source_agent_id(config, buffer_records):
     assert task_records
     for record in task_records:
         assert "source_agent_id" not in record
+
+
+def test_payload_key_sets_source_agent_id_on_harness_tasks(config, buffer_records):
+    """The ``flowcept_source_agent_id`` hook-payload key lands on turn and tool tasks."""
+    fire(config, "SessionStart", source="startup", model="claude-opus-5")
+    fire(config, "UserPromptSubmit", prompt="go", prompt_id="p1")
+    fire(config, "PreToolUse", tool_name="Bash", tool_use_id="t1", tool_input={"command": "ls"})
+    fire(
+        config,
+        "PostToolUse",
+        tool_name="Bash",
+        tool_use_id="t1",
+        tool_response={"ok": True},
+        flowcept_source_agent_id="fw-task-42",
+    )
+    fire(config, "Stop", last_assistant_message="done", flowcept_source_agent_id="fw-task-42")
+    fire(config, "SessionEnd", reason="clear")
+
+    records = buffer_records()
+    (tool,) = _tasks(records, AGENT_TOOL)
+    (turn,) = _tasks(records, AI_MODEL_INVOCATION)
+    assert tool["source_agent_id"] == "fw-task-42"
+    assert turn["source_agent_id"] == "fw-task-42"
+
+
+def test_env_source_agent_id_reaches_harness_tasks(monkeypatch, tmp_path):
+    """FLOWCEPT_HARNESS_SOURCE_AGENT_ID flows through load_config onto every task."""
+    monkeypatch.setenv("FLOWCEPT_HARNESS_SOURCE_AGENT_ID", "fw-env-7")
+    monkeypatch.setenv("FLOWCEPT_HARNESS_HOME", str(tmp_path / "env-home"))
+    env_config = load_config()
+    assert env_config.source_agent_id == "fw-env-7"
+
+    with SessionTracer("sdk_agent", "env-src-run", config=env_config) as tracer:
+        tracer.prompt("hi")
+        call = tracer.tool_start("search", {"q": "x"})
+        tracer.tool_end(call, tool_response={"hits": 1})
+        tracer.turn_end("done")
+
+    records = []
+    for path in sorted(env_config.buffers_dir.glob("*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+    task_records = _tasks(records)
+    assert task_records
+    for record in task_records:
+        assert record["source_agent_id"] == "fw-env-7"
+
+
+def test_payload_key_wins_over_env_source_agent_id(config, buffer_records):
+    """When both are set, the payload key beats the env-configured value."""
+    config.source_agent_id = "fw-from-env"  # what load_config would have set
+    fire(config, "PreToolUse", tool_name="Bash", tool_use_id="t1", tool_input={"command": "ls"})
+    fire(
+        config,
+        "PostToolUse",
+        tool_name="Bash",
+        tool_use_id="t1",
+        tool_response={"ok": True},
+        flowcept_source_agent_id="fw-from-payload",
+    )
+    fire(config, "Stop", last_assistant_message="done")
+
+    records = buffer_records()
+    (tool,) = _tasks(records, AGENT_TOOL)
+    assert tool["source_agent_id"] == "fw-from-payload"
+    # An event without the payload key still falls back to the env value.
+    (turn,) = _tasks(records, AI_MODEL_INVOCATION)
+    assert turn["source_agent_id"] == "fw-from-env"
 
 
 # -- campaign_id as the cross-system join key -----------------------------------
@@ -268,3 +336,25 @@ def test_harness_tool_task_id_round_trips_through_a_langgraph_run(config, buffer
     assert graph_task["custom_metadata"]["source_agent_id"] == source_task_id
     for node_task in (t for t in fake.task_messages if t["subtype"] == "langgraph_node"):
         assert node_task["custom_metadata"]["source_agent_id"] == source_task_id
+
+
+# -- harness -> framework linking -------------------------------------------------
+
+
+def test_framework_task_id_round_trips_into_harness_records(config, buffer_records, captured):
+    """A real framework-emitted task_id lands as source_agent_id on harness tasks."""
+    fake = _run_graph(captured, {"value": 1})
+    graph_task = next(t for t in fake.task_messages if t["subtype"] == "langgraph_graph")
+    framework_task_id = graph_task["task_id"]
+
+    with SessionTracer("sdk_agent", "link-back", config=config, source_agent_id=framework_task_id) as tracer:
+        tracer.prompt("analyze the graph run")
+        call = tracer.tool_start("inspect", {"target": "graph"})
+        tracer.tool_end(call, tool_response={"ok": True})
+        tracer.turn_end("done")
+
+    records = buffer_records()
+    (tool,) = _tasks(records, AGENT_TOOL)
+    (turn,) = _tasks(records, AI_MODEL_INVOCATION)
+    assert tool["source_agent_id"] == framework_task_id
+    assert turn["source_agent_id"] == framework_task_id

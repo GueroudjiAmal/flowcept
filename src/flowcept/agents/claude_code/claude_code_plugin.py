@@ -113,6 +113,12 @@ def to_event(payload: dict[str, Any]) -> HarnessEvent | None:
     agent_ref = payload.get("agent_id")
     agent_name = payload.get("agent_type")
 
+    # `flowcept_source_agent_id` is Flowcept's own extension key: something
+    # that injects payload fields (a wrapper, a test, a future harness knob)
+    # can name a framework-emitted task/agent id to link back to. It wins over
+    # the FLOWCEPT_HARNESS_SOURCE_AGENT_ID env fallback read by the recorder.
+    source_agent_id = payload.get("flowcept_source_agent_id")
+
     error = None
     if hook_name == "PostToolUseFailure":
         error = _text(_first(payload, "error", "tool_error", "tool_response")) or "tool failed"
@@ -139,6 +145,7 @@ def to_event(payload: dict[str, Any]) -> HarnessEvent | None:
         error=error,
         agent_name=agent_name,
         agent_ref=agent_ref,
+        source_agent_id=str(source_agent_id) if source_agent_id is not None else None,
         message=_text(payload.get("message")),
         raw=_raw_for(kind, payload),
     )

@@ -37,6 +37,7 @@ _FIELDS = (
     "usage",
     "agent_name",
     "agent_ref",
+    "source_agent_id",
     "raw",
     "message",
     "tags",
@@ -68,6 +69,12 @@ class HarnessEvent:
         Subagent type/name, e.g. ``Explore``. ``None`` means the main assistant.
     agent_ref:
         The harness's own subagent identifier, used to pair start with stop.
+    source_agent_id:
+        A task or agent id from *another* capture system (e.g. a
+        framework-emitted task that launched this session) to link back to.
+        Hook adapters read it from the ``flowcept_source_agent_id`` payload
+        key; ``FLOWCEPT_HARNESS_SOURCE_AGENT_ID`` is the env fallback, and the
+        payload key wins.
     raw:
         The untouched source event, kept in ``custom_metadata.raw_event``.
     """
@@ -99,6 +106,7 @@ class HarnessEvent:
         usage: dict[str, Any] | None = None,
         agent_name: str | None = None,
         agent_ref: str | None = None,
+        source_agent_id: str | None = None,
         raw: dict[str, Any] | None = None,
         message: str | None = None,
         tags: list[str] | None = None,
@@ -126,6 +134,7 @@ class HarnessEvent:
         self.usage = usage
         self.agent_name = agent_name
         self.agent_ref = agent_ref
+        self.source_agent_id = source_agent_id
         self.raw = raw
         self.message = message
         self.tags = tags
@@ -135,4 +144,5 @@ class HarnessEvent:
         return {name: getattr(self, name) for name in _FIELDS if getattr(self, name) is not None}
 
     def __repr__(self) -> str:
+        """Return a short debug representation naming the event and session."""
         return f"HarnessEvent(kind={self.kind!r}, harness={self.harness!r}, session_id={self.session_id!r})"

@@ -158,6 +158,23 @@ hook cannot observe individual API calls, so hook-based capture records one
 invocation per turn; SDK and OTel capture record both. `granularity` in
 `custom_metadata` says which you are looking at.
 
+### Linking to other capture systems
+
+Harness sessions can point back at provenance emitted by the agent-framework
+plugins (LangGraph, Academy, AutoGen, ...). Give the harness a
+framework-emitted task or agent id and every turn, tool, and LLM-call task it
+records carries it as `source_agent_id`:
+
+- **hook payload** — a `flowcept_source_agent_id` key in the payload (set by a
+  wrapper or whatever launches the harness) wins for that event;
+- **environment** — `FLOWCEPT_HARNESS_SOURCE_AGENT_ID` applies to every event
+  of the process it is set for;
+- **SessionTracer** — pass `source_agent_id=...` when constructing the tracer.
+
+The reverse direction (a framework record pointing at a harness task) is the
+framework plugins' `_source_agent_id` / `source_agent_id` input, and
+`flowcept-harness analyze --links` walks both kinds of edge.
+
 ## Where it goes
 
 Records are appended as JSONL, one file per session, under
@@ -195,6 +212,7 @@ file, a plugin's `userConfig`, or a shell profile.
 | `FLOWCEPT_HARNESS_REDACT` | `1` | Redact credential-shaped keys and literals. |
 | `FLOWCEPT_HARNESS_CAPTURE_PROMPTS` | `1` | Off stores prompt digests only. |
 | `FLOWCEPT_HARNESS_CAPTURE_TOOL_RESULTS` | `1` | Off stores inputs but not outputs. |
+| `FLOWCEPT_HARNESS_SOURCE_AGENT_ID` | *(unset)* | Link tasks to another system's task/agent id. |
 | `FLOWCEPT_HARNESS_ONLINE` | `0` | Publish to the Flowcept MQ as you go. |
 | `FLOWCEPT_HARNESS_TIMEOUT_MS` | `2000` | Hard ceiling on hook wall time. |
 | `FLOWCEPT_HARNESS_DEBUG` | `0` | Log capture failures instead of staying silent. |
@@ -248,6 +266,7 @@ correctness alone would:
 ```
 flowcept-harness sessions     list captured sessions
 flowcept-harness show         show one session's activity
+flowcept-harness analyze      analyze a session (--errors, --slowest, --links, --compare A B)
 flowcept-harness status       configuration and capture health
 flowcept-harness report       generate a Flowcept report
 flowcept-harness flush        publish buffers to a Flowcept backend

@@ -71,6 +71,7 @@ class Config:
         "max_str",
         "online",
         "redact",
+        "source_agent_id",
         "timeout_ms",
     )
 
@@ -93,6 +94,10 @@ class Config:
         capture_telemetry: bool = False,
         capture_prompts: bool = True,
         capture_tool_results: bool = True,
+        #: Link every emitted turn/tool/LLM task back to a task or agent from
+        #: another capture system (stamped as ``source_agent_id``). A
+        #: ``flowcept_source_agent_id`` hook-payload key wins over this.
+        source_agent_id: str | None = None,
         #: Publish to the Flowcept MQ in addition to the JSONL buffer.
         online: bool = False,
         #: Hard ceiling on hook wall time.
@@ -111,6 +116,7 @@ class Config:
         self.capture_telemetry = capture_telemetry
         self.capture_prompts = capture_prompts
         self.capture_tool_results = capture_tool_results
+        self.source_agent_id = source_agent_id
         self.online = online
         self.timeout_ms = timeout_ms
         self.debug = debug
@@ -163,6 +169,7 @@ def load_config() -> Config:
         capture_telemetry=_env_bool("TELEMETRY", False),
         capture_prompts=_env_bool("CAPTURE_PROMPTS", True),
         capture_tool_results=_env_bool("CAPTURE_TOOL_RESULTS", True),
+        source_agent_id=_env("SOURCE_AGENT_ID"),
         online=_env_bool("ONLINE", False),
         timeout_ms=_env_int("TIMEOUT_MS", 2000),
         debug=_env_bool("DEBUG", False),

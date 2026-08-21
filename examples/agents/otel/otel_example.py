@@ -73,9 +73,11 @@ def main():
     # A model invocation: gen_ai.operation.name "chat" marks the span as an
     # ai_model_invocation task at call granularity.
     with tracer.start_as_current_span("chat gpt-4o-mini") as span:
-        # Note: `gen_ai.system` (when set) names the harness in the provenance;
-        # keep it identical across a session's spans or omit it, otherwise the
-        # session's records split across two workflows.
+        # `gen_ai.system` is optional: the first non-empty value a conversation
+        # shows is recorded once as the session's provider (first-value-wins).
+        # Spans with and without it land in the same workflow, so setting it on
+        # only this span -- as here -- does not split the session.
+        span.set_attribute("gen_ai.system", "openai")
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.conversation.id", session_id)
         span.set_attribute("gen_ai.request.model", "gpt-4o-mini")

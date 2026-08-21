@@ -12,9 +12,9 @@ import json
 
 import pytest
 
-from flowcept.agents.harness import cli
+from flowcept.agents.harness import cli, ids
 
-from .test_claude_code import fire
+from .test_claude_code import SESSION, fire
 from .test_mcp_server import call
 
 pytest.importorskip("mcp")
@@ -191,3 +191,60 @@ def test_cli_analyze_reports_a_miss(run, config):
     code, out = run("analyze", "definitely-not-a-session")
     assert code == cli.FAILED
     assert "No session matching" in out
+
+
+# -- CLI ``analyze --compare`` ----------------------------------------------------
+
+SECOND_SESSION = "sess-def"
+
+
+def record_second_session(config):
+    """Capture a smaller error-free session under a second session id."""
+    sid = SECOND_SESSION
+    fire(config, "SessionStart", source="startup", model="claude-opus-5", session_id=sid)
+    fire(config, "UserPromptSubmit", prompt="run it again", prompt_id="p1", session_id=sid)
+    fire(config, "PreToolUse", tool_name="Bash", tool_use_id="t1", tool_input={"command": "pytest -q"}, session_id=sid)
+    fire(config, "PostToolUse", tool_name="Bash", tool_use_id="t1", tool_response={"exit_code": 0}, session_id=sid)
+    fire(config, "Stop", last_assistant_message="All green.", session_id=sid)
+    fire(config, "SessionEnd", reason="clear", session_id=sid)
+
+
+def test_cli_analyze_compare(run, config):
+    """`analyze --compare A B` prints per-activity count, duration, and error deltas."""
+    record_session(config)
+    record_second_session(config)
+    session_a = ids.workflow_id_for("claude_code", SESSION)
+    session_b = ids.workflow_id_for("claude_code", SECOND_SESSION)
+
+    code, out = run("analyze", "--compare", session_a[:8], session_b[:8])
+    assert code == cli.OK
+    assert f"comparing: A={session_a}  B={session_b}" in out
+    assert "tasks: 4 -> 2 (-2)" in out
+    assert "count 2 -> 1 (-1)" in out  # Bash ran twice in A, once in B
+    assert "errors 50% -> 0%" in out
+    assert "only in A: Grep" in out
+
+
+def test_cli_analyze_compare_reports_a_miss(run, config):
+    """An unknown session in either slot fails with a clear message."""
+    record_session(config)
+    session_a = ids.workflow_id_for("claude_code", SESSION)
+    code, out = run("analyze", "--compare", session_a[:8], "definitely-not-a-session")
+    assert code == cli.FAILED
+    assert "No session matching" in out
+
+
+def test_cli_analyze_compare_is_exclusive(run, config):
+    """--compare rejects a positional session and the single-session flags."""
+    record_session(config)
+    record_second_session(config)
+    session_a = ids.workflow_id_for("claude_code", SESSION)
+    session_b = ids.workflow_id_for("claude_code", SECOND_SESSION)
+
+    # argparse itself rejects a positional session next to --compare.
+    with pytest.raises(SystemExit):
+        cli.main(["analyze", session_a[:8], "--compare", session_a[:8], session_b[:8]])
+
+    code, out = run("analyze", "--compare", session_a[:8], session_b[:8], "--errors")
+    assert code == cli.FAILED
+    assert "--compare cannot be combined" in out

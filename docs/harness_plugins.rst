@@ -234,7 +234,11 @@ optional ``session`` id prefix and defaults to the most recent session:
   status, and parent-chain depth (``limit`` defaults to 10).
 - ``cross_links`` — cross-framework provenance edges built from
   ``source_agent_id`` pointers (e.g. a LangGraph run launched from a coding
-  session), plus the count of unlinked tasks.
+  session), plus the count of unlinked tasks. The harness side of the edge is
+  written by giving capture a framework-emitted task/agent id: the
+  ``flowcept_source_agent_id`` hook-payload key, the
+  ``FLOWCEPT_HARNESS_SOURCE_AGENT_ID`` environment variable (payload key
+  wins), or ``SessionTracer(..., source_agent_id=...)``.
 
 **CLI.** The same analyses from the terminal:
 
@@ -244,9 +248,12 @@ optional ``session`` id prefix and defaults to the most recent session:
    flowcept-harness analyze <session> --errors     # failure clustering
    flowcept-harness analyze <session> --slowest 5  # latency ranking
    flowcept-harness analyze <session> --links      # cross-framework links
+   flowcept-harness analyze --compare <a> <b>      # per-activity deltas of two sessions
 
 ``<session>`` is a workflow id or prefix and defaults to the most recent
-session.
+session. ``--compare`` takes two ids/prefixes instead of the positional
+session and prints per-activity count, average-duration, and error-rate
+deltas.
 
 **Claude Code plugin.** ``plugins/flowcept`` wires the MCP server in through
 its ``.mcp.json``, which declares a ``flowcept-provenance`` stdio server

@@ -47,6 +47,11 @@ class SessionTracer:
     model, cwd, project_dir:
         Sticky context replayed onto every event, so callbacks that only know
         about a tool call still produce fully attributed records.
+    source_agent_id:
+        A task or agent id from another capture system (e.g. a
+        framework-emitted task that launched this run). Stamped as
+        ``source_agent_id`` on every turn/tool/LLM task the run emits. Falls
+        back to ``FLOWCEPT_HARNESS_SOURCE_AGENT_ID`` via the config.
     """
 
     def __init__(
@@ -58,6 +63,7 @@ class SessionTracer:
         model: str | None = None,
         cwd: str | None = None,
         project_dir: str | None = None,
+        source_agent_id: str | None = None,
         recorder: Recorder | None = None,
     ):
         self.harness = harness
@@ -66,6 +72,7 @@ class SessionTracer:
         self.model = model
         self.cwd = cwd or _safe_cwd()
         self.project_dir = project_dir or os.environ.get("FLOWCEPT_HARNESS_PROJECT_DIR") or self.cwd
+        self.source_agent_id = source_agent_id
         self._started = False
         self._ended = False
         # SDK callbacks can fire from a worker thread and from the main thread
@@ -80,6 +87,7 @@ class SessionTracer:
         fields.setdefault("model", self.model)
         fields.setdefault("cwd", self.cwd)
         fields.setdefault("project_dir", self.project_dir)
+        fields.setdefault("source_agent_id", self.source_agent_id)
         event = HarnessEvent(kind=kind, harness=self.harness, session_id=self.session_id, **fields)
         with self._lock:
             return self.recorder.record(event)

@@ -278,6 +278,7 @@ class Recorder:
             activity_id="agent_turn",
             subtype=vocab.AI_MODEL_INVOCATION,
             agent_id=state.get("agent_id"),
+            source_agent_id=self._source_agent_id(event),
             used=self._clean_dict({"prompt": turn.get("prompt")}),
             generated=generated,
             custom_metadata=self._clean_dict(metadata),
@@ -354,6 +355,7 @@ class Recorder:
                 activity_id=tool_name,
                 subtype=vocab.AGENT_TOOL,
                 agent_id=agent_id,
+                source_agent_id=self._source_agent_id(event),
                 parent_task_id=parent_task_id,
                 used=used,
                 generated=generated,
@@ -402,6 +404,7 @@ class Recorder:
                 activity_id="llm_interaction",
                 subtype=vocab.AI_MODEL_INVOCATION,
                 agent_id=state.get("agent_id"),
+                source_agent_id=self._source_agent_id(event),
                 parent_task_id=turn.get("task_id"),
                 used=self._clean_dict({"prompt": self._prompt_value(event.prompt)}),
                 generated=self._clean_dict({"response": self._prompt_value(event.response)}),
@@ -533,6 +536,17 @@ class Recorder:
         if scope == "global":
             return ids.campaign_id_for_project(None)
         return ids.campaign_id_for_project(event.project_dir or event.cwd)
+
+    def _source_agent_id(self, event: HarnessEvent) -> str | None:
+        """Cross-system source id for this event's task records.
+
+        The ``flowcept_source_agent_id`` payload key (carried on the event)
+        wins over the ``FLOWCEPT_HARNESS_SOURCE_AGENT_ID`` environment value
+        (carried on the config). Only turn, tool, and LLM-call tasks get it:
+        lifecycle events have no dataflow of their own, and session/subagent
+        workflow records do not model the field.
+        """
+        return event.source_agent_id or self.config.source_agent_id
 
     def _prompt_value(self, text: str | None):
         if text is None:

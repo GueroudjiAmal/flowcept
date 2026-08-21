@@ -50,6 +50,9 @@ DEFAULT_FIELDS: dict[str, list[str]] = {
     "error": ["error", "error_message", "errorMessage", "stderr", "exception"],
     "agent_name": ["agent_type", "agentType", "agent_name", "subagent_type", "role"],
     "agent_ref": ["agent_id", "agentId", "subagent_id", "child_session_id"],
+    # Flowcept's own extension key: a framework-emitted task/agent id to link
+    # back to. Wins over the FLOWCEPT_HARNESS_SOURCE_AGENT_ID env fallback.
+    "source_agent_id": ["flowcept_source_agent_id"],
     "prompt_id": ["prompt_id", "promptId", "turn_id", "turnId", "message_id"],
     "source": ["source", "reason", "trigger", "event_reason"],
     "permission_mode": ["permission_mode", "permissionMode", "approval_mode", "mode"],
@@ -250,6 +253,7 @@ def to_event(
         usage=usage if isinstance(usage, dict) else None,
         agent_name=_as_text(_pick(payload, profile.keys_for("agent_name"))),
         agent_ref=_as_text(_pick(payload, profile.keys_for("agent_ref"))),
+        source_agent_id=_as_text(_pick(payload, profile.keys_for("source_agent_id"))),
         message=_as_text(_pick(payload, profile.keys_for("message"))),
         # Only lifecycle events keep their raw payload (the recorder discards it
         # otherwise). Tool and turn events are high-volume and would double the

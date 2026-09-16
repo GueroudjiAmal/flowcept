@@ -34,6 +34,13 @@ from flowcept.agents.harness.tracer import SessionTracer
 #: recognized.
 SUBAGENT_TOOLS = frozenset({"Task", "Agent"})
 
+#: System-message subtypes that earn a record. The system stream is an open
+#: channel: the CLI also uses it for progress tickers such as ``thinking_tokens``,
+#: which arrive hundreds of times per turn, carry no provenance, and would
+#: otherwise dwarf the session. Unlisted subtypes are ignored, the same way the
+#: Claude Code hook adapter ignores hook events it has no mapping for.
+RECORDED_SYSTEM_SUBTYPES = frozenset({"compact_boundary"})
+
 
 class ClaudeAgentTracer:
     """Turns a Claude Agent SDK message stream into Flowcept provenance.
@@ -198,11 +205,10 @@ class ClaudeAgentTracer:
             # Nothing happened yet worth a record; the id and model were the
             # point of this message.
             return
+        if subtype not in RECORDED_SYSTEM_SUBTYPES:
+            return
         self._ensure_started()
-        if subtype == "compact_boundary":
-            self.tracer.compact(source=subtype)
-        elif subtype:
-            self.tracer.notify(subtype)
+        self.tracer.compact(source=subtype)
 
     # -- teardown ------------------------------------------------------------
 

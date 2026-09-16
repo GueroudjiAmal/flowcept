@@ -13,7 +13,7 @@ from flowcept.agents.harness import SessionTracer
 from flowcept.agents.claude_agent_sdk.claude_agent_sdk_plugin import ClaudeAgentTracer
 from flowcept.agents.langchain.langchain_plugin import FlowceptCallbackHandler
 from flowcept.agents.openai_agents.openai_agents_plugin import FlowceptTraceProcessor
-from flowcept.agents.harness.vocab import AGENT_TOOL, AI_MODEL_INVOCATION, SUBAGENT_SESSION
+from flowcept.agents.harness.vocab import AGENT_TOOL, AI_MODEL_INVOCATION, HARNESS_EVENT, SUBAGENT_SESSION
 
 
 def tasks(records, subtype=None):
@@ -196,6 +196,26 @@ def test_claude_agent_tool_opens_a_subagent_workflow(config, buffer_records):
     subagent = workflows(buffer_records(), SUBAGENT_SESSION)
     assert len(subagent) == 1
     assert subagent[0]["used"] == {"agent_type": "Explore", "prompt": "find the tests"}
+
+
+def test_claude_agent_ignores_progress_system_messages(config, buffer_records):
+    """`thinking_tokens` is a progress ticker, not provenance."""
+    with ClaudeAgentTracer(config=config, prompt="p") as tracer:
+        for _ in range(5):
+            tracer.handle(SystemMessage("thinking_tokens", {"count": 120}))
+        tracer.handle(ResultMessage(result="ok"))
+
+    assert tasks(buffer_records(), HARNESS_EVENT) == []
+
+
+def test_claude_agent_records_a_compaction(config, buffer_records):
+    with ClaudeAgentTracer(config=config, prompt="p") as tracer:
+        tracer.handle(SystemMessage("compact_boundary", {}))
+        tracer.handle(ResultMessage(result="ok"))
+
+    events = tasks(buffer_records(), HARNESS_EVENT)
+    assert len(events) == 1
+    assert events[0]["activity_id"] == "compact"
 
 
 def test_claude_agent_failed_tool_is_an_error(config, buffer_records):

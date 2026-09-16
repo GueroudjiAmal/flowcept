@@ -28,9 +28,11 @@ from typing import Any
 from flowcept.agents.harness.config import Config
 from flowcept.agents.harness.tracer import SessionTracer
 
-#: The tool the assistant uses to spawn a subagent. It gets a nested workflow
+#: The tools the assistant uses to spawn a subagent. One gets a nested workflow
 #: in addition to its tool record, so the subagent's work is attributable to it.
-SUBAGENT_TOOL = "Task"
+#: The name has changed across CLI versions ("Task", then "Agent"), so both are
+#: recognized.
+SUBAGENT_TOOLS = frozenset({"Task", "Agent"})
 
 
 class ClaudeAgentTracer:
@@ -135,7 +137,7 @@ class ClaudeAgentTracer:
             self._tools[tool_use_id] = name
             self.tracer.tool_start(name, tool_input, tool_use_id=tool_use_id)
 
-            if name == SUBAGENT_TOOL:
+            if name in SUBAGENT_TOOLS:
                 arguments = tool_input if isinstance(tool_input, dict) else {}
                 self._subagents[tool_use_id] = self.tracer.subagent_start(
                     arguments.get("subagent_type") or arguments.get("description") or "subagent",

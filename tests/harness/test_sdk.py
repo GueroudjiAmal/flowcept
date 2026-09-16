@@ -182,6 +182,22 @@ def test_claude_agent_task_tool_opens_a_subagent_workflow(config, buffer_records
     assert subagent[0]["status"] == "FINISHED"
 
 
+def test_claude_agent_tool_opens_a_subagent_workflow(config, buffer_records):
+    """The subagent tool is named `Agent` on newer CLIs and `Task` on older ones."""
+    with ClaudeAgentTracer(config=config, prompt="explore") as tracer:
+        tracer.handle(
+            AssistantMessage(
+                [Block(id="tu_agent", name="Agent", input={"subagent_type": "Explore", "prompt": "find the tests"})]
+            )
+        )
+        tracer.handle(UserMessage([Block(tool_use_id="tu_agent", content="found 3", is_error=False)]))
+        tracer.handle(ResultMessage(result="ok"))
+
+    subagent = workflows(buffer_records(), SUBAGENT_SESSION)
+    assert len(subagent) == 1
+    assert subagent[0]["used"] == {"agent_type": "Explore", "prompt": "find the tests"}
+
+
 def test_claude_agent_failed_tool_is_an_error(config, buffer_records):
     with ClaudeAgentTracer(config=config, prompt="p") as tracer:
         tracer.handle(AssistantMessage([Block(id="tu_1", name="Bash", input={"command": "false"})]))

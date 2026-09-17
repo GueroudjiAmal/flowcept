@@ -28,9 +28,18 @@ from typing import Any
 from flowcept.agents.harness.config import Config
 from flowcept.agents.harness.tracer import SessionTracer
 
-#: The tool the assistant uses to spawn a subagent. It gets a nested workflow
+#: The tools the assistant uses to spawn a subagent. One gets a nested workflow
 #: in addition to its tool record, so the subagent's work is attributable to it.
-SUBAGENT_TOOL = "Task"
+#: The name has changed across CLI versions ("Task", then "Agent"), so both are
+#: recognized.
+SUBAGENT_TOOLS = frozenset({"Task", "Agent"})
+
+#: System-message subtypes that earn a record. The system stream is an open
+#: channel: the CLI also uses it for progress tickers such as ``thinking_tokens``,
+#: which arrive hundreds of times per turn, carry no provenance, and would
+#: otherwise dwarf the session. Unlisted subtypes are ignored, the same way the
+#: Claude Code hook adapter ignores hook events it has no mapping for.
+RECORDED_SYSTEM_SUBTYPES = frozenset({"compact_boundary"})
 
 
 class ClaudeAgentTracer:
@@ -135,7 +144,7 @@ class ClaudeAgentTracer:
             self._tools[tool_use_id] = name
             self.tracer.tool_start(name, tool_input, tool_use_id=tool_use_id)
 
-            if name == SUBAGENT_TOOL:
+            if name in SUBAGENT_TOOLS:
                 arguments = tool_input if isinstance(tool_input, dict) else {}
                 self._subagents[tool_use_id] = self.tracer.subagent_start(
                     arguments.get("subagent_type") or arguments.get("description") or "subagent",
@@ -196,11 +205,10 @@ class ClaudeAgentTracer:
             # Nothing happened yet worth a record; the id and model were the
             # point of this message.
             return
+        if subtype not in RECORDED_SYSTEM_SUBTYPES:
+            return
         self._ensure_started()
-        if subtype == "compact_boundary":
-            self.tracer.compact(source=subtype)
-        elif subtype:
-            self.tracer.notify(subtype)
+        self.tracer.compact(source=subtype)
 
     # -- teardown ------------------------------------------------------------
 
